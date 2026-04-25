@@ -23,7 +23,7 @@
             </div>
 
             <div class="hero-pills">
-                <span class="pill">Cliente manual</span>
+                <span class="pill">Cliente registrado o manual</span>
                 <span class="pill">Items autocompletables</span>
                 <span class="pill">Plan de trabajo</span>
                 <span class="pill">Terminos y notas</span>
@@ -120,6 +120,9 @@
                                     <div class="table-user">
                                         <strong>{{ $quotation['client_company_name'] }}</strong>
                                         <span>{{ $quotation['title'] }}</span>
+                                        <span class="chip @if ($quotation['customer_id']) chip--accent @else chip--muted @endif">
+                                            {{ $quotation['customer_label'] }}
+                                        </span>
                                     </div>
                                 </td>
                                 <td>

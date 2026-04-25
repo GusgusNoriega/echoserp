@@ -1,7 +1,7 @@
 <?php
 
-use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use App\Http\Controllers\Admin\CurrencyController;
+use App\Http\Controllers\Admin\CustomerController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\ModuleController;
 use App\Http\Controllers\Admin\PermissionController;
@@ -10,8 +10,9 @@ use App\Http\Controllers\Admin\QuotationItemController;
 use App\Http\Controllers\Admin\QuotationSettingsController;
 use App\Http\Controllers\Admin\RoleController;
 use App\Http\Controllers\Admin\UserController;
-use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
     return redirect()->route(Auth::check() ? 'admin.dashboard' : 'login');
@@ -111,6 +112,11 @@ Route::middleware('auth')->prefix('admin')->name('admin.')->group(function (): v
             'Puedes agregar accesos rapidos al header si una vista lo necesita.',
         ],
     ])->name('sales.index');
+
+    Route::get('/clientes', [CustomerController::class, 'index'])->name('customers.index');
+    Route::post('/clientes', [CustomerController::class, 'store'])->name('customers.store');
+    Route::put('/clientes/{customer}', [CustomerController::class, 'update'])->name('customers.update');
+    Route::delete('/clientes/{customer}', [CustomerController::class, 'destroy'])->name('customers.destroy');
 
     Route::prefix('cotizaciones')->name('quotations.')->group(function (): void {
         Route::get('/', [QuotationController::class, 'index'])->name('index');

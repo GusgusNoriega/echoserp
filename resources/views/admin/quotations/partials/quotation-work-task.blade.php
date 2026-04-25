@@ -1,5 +1,18 @@
 @php
     $task = $task ?? [];
+    $integerValue = static function (mixed $value): string {
+        if ($value === null || $value === '') {
+            return '';
+        }
+
+        $number = (float) $value;
+
+        if (! is_finite($number)) {
+            return '';
+        }
+
+        return (string) max((int) round($number), 0);
+    };
 @endphp
 
 <article class="quote-task-card" data-work-task>
@@ -15,7 +28,7 @@
 
         <label class="form-field">
             <span>Duracion (dias)</span>
-            <input type="number" name="work_sections[{{ $sectionIndex }}][tasks][{{ $taskIndex }}][duration_days]" value="{{ $task['duration_days'] ?? '' }}" min="0" step="0.01" placeholder="1.00">
+            <input type="number" name="work_sections[{{ $sectionIndex }}][tasks][{{ $taskIndex }}][duration_days]" value="{{ $integerValue($task['duration_days'] ?? '') }}" min="0" step="1" inputmode="numeric" placeholder="1" data-task-duration data-whole-number>
 
             @if ($errors->has("work_sections.$sectionIndex.tasks.$taskIndex.duration_days"))
                 <small class="field-error">{{ $errors->first("work_sections.$sectionIndex.tasks.$taskIndex.duration_days") }}</small>

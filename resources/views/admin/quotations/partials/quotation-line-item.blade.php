@@ -1,6 +1,19 @@
 @php
     $lineItem = $lineItem ?? [];
-    $quantityValue = $lineItem['quantity'] ?? '1.00';
+    $integerValue = static function (mixed $value): string {
+        if ($value === null || $value === '') {
+            return '';
+        }
+
+        $number = (float) $value;
+
+        if (! is_finite($number)) {
+            return '';
+        }
+
+        return (string) max((int) round($number), 0);
+    };
+    $quantityValue = $integerValue($lineItem['quantity'] ?? '1');
     $unitPriceValue = $lineItem['unit_price'] ?? '';
     $discountValue = $lineItem['discount_amount'] ?? '0.00';
     $lineTotal = max(((float) $quantityValue * (float) ($unitPriceValue ?: 0)) - (float) ($discountValue ?: 0), 0);
@@ -104,7 +117,7 @@
     <div class="form-grid form-grid--quote-metrics">
         <label class="form-field">
             <span>Cantidad</span>
-            <input type="number" name="line_items[{{ $index }}][quantity]" value="{{ $quantityValue }}" min="0.01" step="0.01" required data-line-quantity>
+            <input type="number" name="line_items[{{ $index }}][quantity]" value="{{ $quantityValue }}" min="1" step="1" inputmode="numeric" required data-line-quantity data-whole-number>
 
             @if ($errors->has("line_items.$index.quantity"))
                 <small class="field-error">{{ $errors->first("line_items.$index.quantity") }}</small>

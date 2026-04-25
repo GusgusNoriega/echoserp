@@ -2,12 +2,27 @@
 
 @section('content')
     @php
+        $integerValue = static function (mixed $value): string {
+            if ($value === null || $value === '') {
+                return '';
+            }
+
+            $number = (float) $value;
+
+            if (! is_finite($number)) {
+                return '';
+            }
+
+            return (string) max((int) round($number), 0);
+        };
+
         $numberValue = old('number', $quotation['number'] ?? '');
         $statusValue = old('status', $quotation['status'] ?? 'draft');
         $issueDateValue = old('issue_date', $quotation['issue_date'] ?? now()->toDateString());
         $validUntilValue = old('valid_until', $quotation['valid_until'] ?? '');
         $titleValue = old('title', $quotation['title'] ?? '');
         $summaryValue = old('summary', $quotation['summary'] ?? '');
+        $customerValue = (int) old('customer_id', $quotation['customer_id'] ?? 0);
         $clientCompanyValue = old('client_company_name', $quotation['client_company_name'] ?? '');
         $clientDocumentLabelValue = old('client_document_label', $quotation['client_document_label'] ?? 'RUC');
         $clientDocumentNumberValue = old('client_document_number', $quotation['client_document_number'] ?? '');
@@ -19,7 +34,7 @@
         $workEndValue = old('work_end_date', $quotation['work_end_date'] ?? '');
         $estimatedHoursValue = old('estimated_hours', $quotation['estimated_hours'] ?? '');
         $estimatedDaysValue = old('estimated_days', $quotation['estimated_days'] ?? '');
-        $hoursPerDayValue = old('hours_per_day', $quotation['hours_per_day'] ?? '8.00');
+        $hoursPerDayValue = old('hours_per_day', $quotation['hours_per_day'] ?? '8');
         $taxRateValue = old('tax_rate', $quotation['tax_rate'] ?? '0.00');
         $notesValue = old('notes', $quotation['notes'] ?? '');
         $termsValue = old('terms_and_conditions', $quotation['terms_and_conditions'] ?? '');
@@ -38,7 +53,7 @@
                 'image_source' => '',
                 'image_url' => '',
                 'remove_image' => '0',
-                'quantity' => '1.00',
+                'quantity' => '1',
                 'unit_label' => '',
                 'unit_price' => '',
                 'discount_amount' => '0.00',
@@ -56,6 +71,15 @@
             ]];
         }
 
+        $workDurationDays = collect($workSections)
+            ->flatMap(static fn (mixed $section): array => is_array($section) && is_array($section['tasks'] ?? null) ? $section['tasks'] : [])
+            ->sum(static fn (mixed $task): int => is_array($task) ? max((int) round((float) ($task['duration_days'] ?? 0)), 0) : 0);
+        $hoursPerDayValue = $integerValue($hoursPerDayValue);
+        $estimatedDaysValue = $workDurationDays > 0 ? (string) $workDurationDays : $integerValue($estimatedDaysValue);
+        $estimatedHoursValue = $estimatedDaysValue !== '' && $hoursPerDayValue !== ''
+            ? (string) ((int) $estimatedDaysValue * (int) $hoursPerDayValue)
+            : $integerValue($estimatedHoursValue);
+
         $summarySubtotal = collect($lineItems)->sum(static fn (array $item): float => ((float) ($item['quantity'] ?? 0)) * ((float) ($item['unit_price'] ?? 0)));
         $summaryDiscount = collect($lineItems)->sum(static fn (array $item): float => (float) ($item['discount_amount'] ?? 0));
         $summaryBase = max($summarySubtotal - $summaryDiscount, 0);
@@ -68,8 +92,8 @@
             <p class="section-kicker">Editor comercial</p>
             <h2>Estructura la cotizacion completa y deja lista la data para un PDF detallado.</h2>
             <p class="section-copy">
-                Los datos del cliente se registran manualmente, mientras que los items pueden salir del catalogo o crearse
-                manualmente dentro del documento. El plan de trabajo queda agrupado por bloques y tareas.
+                Los datos del cliente pueden salir del area de clientes o registrarse manualmente, mientras que los items
+                pueden salir del catalogo o crearse manualmente dentro del documento.
             </p>
 
             <div class="hero-actions">
@@ -136,6 +160,7 @@
         enctype="multipart/form-data"
         data-quotation-editor
         data-catalog-items='@json($catalogItems)'
+        data-customers='@json($customerOptions)'
     >
         @csrf
 
@@ -236,14 +261,30 @@
                     <div class="panel-heading">
                         <div>
                             <p class="section-kicker">Cliente</p>
-                            <h3>Datos manuales del cliente</h3>
+                            <h3>Datos del cliente</h3>
                         </div>
                     </div>
+
+                    <label class="form-field">
+                        <span>Cliente registrado</span>
+                        <select name="customer_id" data-customer-select>
+                            <option value="">Cliente manual / sin registro</option>
+                            @foreach ($customerOptions as $customer)
+                                <option value="{{ $customer['id'] }}" @selected($customerValue === (int) $customer['id'])>
+                                    {{ $customer['label'] }} @if (! $customer['is_active']) - Inactivo @endif
+                                </option>
+                            @endforeach
+                        </select>
+
+                        @if ($errors->has('customer_id'))
+                            <small class="field-error">{{ $errors->first('customer_id') }}</small>
+                        @endif
+                    </label>
 
                     <div class="form-grid form-grid--quote-head">
                         <label class="form-field">
                             <span>Razon social</span>
-                            <input type="text" name="client_company_name" value="{{ $clientCompanyValue }}" required placeholder="Empresa cliente">
+                            <input type="text" name="client_company_name" value="{{ $clientCompanyValue }}" required placeholder="Empresa cliente" data-customer-company>
 
                             @if ($errors->has('client_company_name'))
                                 <small class="field-error">{{ $errors->first('client_company_name') }}</small>
@@ -252,7 +293,7 @@
 
                         <label class="form-field">
                             <span>Tipo de documento</span>
-                            <input type="text" name="client_document_label" value="{{ $clientDocumentLabelValue }}" required placeholder="RUC">
+                            <input type="text" name="client_document_label" value="{{ $clientDocumentLabelValue }}" required placeholder="RUC" data-customer-document-label>
 
                             @if ($errors->has('client_document_label'))
                                 <small class="field-error">{{ $errors->first('client_document_label') }}</small>
@@ -261,7 +302,7 @@
 
                         <label class="form-field">
                             <span>Numero de documento</span>
-                            <input type="text" name="client_document_number" value="{{ $clientDocumentNumberValue }}" placeholder="20508768533">
+                            <input type="text" name="client_document_number" value="{{ $clientDocumentNumberValue }}" placeholder="20508768533" data-customer-document-number>
 
                             @if ($errors->has('client_document_number'))
                                 <small class="field-error">{{ $errors->first('client_document_number') }}</small>
@@ -270,7 +311,7 @@
 
                         <label class="form-field">
                             <span>Correo</span>
-                            <input type="email" name="client_email" value="{{ $clientEmailValue }}" placeholder="cliente@empresa.com">
+                            <input type="email" name="client_email" value="{{ $clientEmailValue }}" placeholder="cliente@empresa.com" data-customer-email>
 
                             @if ($errors->has('client_email'))
                                 <small class="field-error">{{ $errors->first('client_email') }}</small>
@@ -281,7 +322,7 @@
                     <div class="form-grid form-grid--two">
                         <label class="form-field">
                             <span>Telefono</span>
-                            <input type="text" name="client_phone" value="{{ $clientPhoneValue }}" placeholder="+51 999 999 999">
+                            <input type="text" name="client_phone" value="{{ $clientPhoneValue }}" placeholder="+51 999 999 999" data-customer-phone>
 
                             @if ($errors->has('client_phone'))
                                 <small class="field-error">{{ $errors->first('client_phone') }}</small>
@@ -290,7 +331,7 @@
 
                         <label class="form-field">
                             <span>Direccion</span>
-                            <input type="text" name="client_address" value="{{ $clientAddressValue }}" placeholder="Direccion fiscal o comercial">
+                            <input type="text" name="client_address" value="{{ $clientAddressValue }}" placeholder="Direccion fiscal o comercial" data-customer-address>
 
                             @if ($errors->has('client_address'))
                                 <small class="field-error">{{ $errors->first('client_address') }}</small>
@@ -328,7 +369,7 @@
 
                         <label class="form-field">
                             <span>Horas estimadas</span>
-                            <input type="number" name="estimated_hours" value="{{ $estimatedHoursValue }}" min="0" step="0.01" placeholder="384.00">
+                            <input type="number" name="estimated_hours" value="{{ $estimatedHoursValue }}" min="0" step="1" inputmode="numeric" placeholder="384" data-estimated-hours data-whole-number readonly>
 
                             @if ($errors->has('estimated_hours'))
                                 <small class="field-error">{{ $errors->first('estimated_hours') }}</small>
@@ -337,7 +378,7 @@
 
                         <label class="form-field">
                             <span>Dias estimados</span>
-                            <input type="number" name="estimated_days" value="{{ $estimatedDaysValue }}" min="0" step="0.01" placeholder="48.00">
+                            <input type="number" name="estimated_days" value="{{ $estimatedDaysValue }}" min="0" step="1" inputmode="numeric" placeholder="48" data-estimated-days data-whole-number readonly>
 
                             @if ($errors->has('estimated_days'))
                                 <small class="field-error">{{ $errors->first('estimated_days') }}</small>
@@ -348,7 +389,7 @@
                     <div class="form-grid form-grid--two">
                         <label class="form-field">
                             <span>Horas por dia</span>
-                            <input type="number" name="hours_per_day" value="{{ $hoursPerDayValue }}" min="0" step="0.01" placeholder="8.00">
+                            <input type="number" name="hours_per_day" value="{{ $hoursPerDayValue }}" min="0" step="1" inputmode="numeric" placeholder="8" data-hours-per-day data-whole-number>
 
                             @if ($errors->has('hours_per_day'))
                                 <small class="field-error">{{ $errors->first('hours_per_day') }}</small>
@@ -489,7 +530,8 @@
                     </div>
 
                     <ul class="bullet-list bullet-list--muted">
-                        <li>El cliente siempre se registra manualmente dentro de la cotizacion.</li>
+                        <li>Puedes elegir un cliente registrado o dejar la cotizacion como cliente manual.</li>
+                        <li>Al elegir un cliente, sus datos actuales se copian a los campos editables de la cotizacion.</li>
                         <li>Si eliges un item del catalogo, se completan nombre, descripcion, unidad, precio e imagen.</li>
                         <li>Puedes editar cualquier campo autocompletado antes de guardar.</li>
                         <li>Cada linea puede mantener la imagen del catalogo o reemplazarse con una imagen solo para esa cotizacion.</li>
@@ -518,7 +560,7 @@
                 'image_source' => '',
                 'image_url' => '',
                 'remove_image' => '0',
-                'quantity' => '1.00',
+                'quantity' => '1',
                 'unit_label' => '',
                 'unit_price' => '',
                 'discount_amount' => '0.00',

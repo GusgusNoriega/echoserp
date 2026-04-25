@@ -15,6 +15,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
     'valid_until',
     'title',
     'summary',
+    'customer_id',
     'client_company_name',
     'client_document_label',
     'client_document_number',
@@ -63,6 +64,11 @@ class Quotation extends Model
     public function currency(): BelongsTo
     {
         return $this->belongsTo(Currency::class);
+    }
+
+    public function customer(): BelongsTo
+    {
+        return $this->belongsTo(Customer::class);
     }
 
     public function createdBy(): BelongsTo

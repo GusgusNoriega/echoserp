@@ -3,6 +3,7 @@
 namespace Tests\Feature\Admin;
 
 use App\Models\Currency;
+use App\Models\Customer;
 use App\Models\Quotation;
 use App\Models\QuotationItem;
 use App\Models\QuotationSetting;
@@ -251,6 +252,141 @@ class QuotationModuleTest extends TestCase
         Storage::disk('quote_media')->assertMissing($currentPath);
     }
 
+    public function test_customer_records_can_be_created_updated_and_deleted(): void
+    {
+        $this->seed();
+        $this->signInAsAdmin();
+
+        $this->get('/admin/clientes')
+            ->assertOk()
+            ->assertSee('Clientes')
+            ->assertSee('Nuevo cliente');
+
+        $this->post('/admin/clientes', [
+            'company_name' => 'Cliente Demo SAC',
+            'document_label' => 'RUC',
+            'document_number' => '20111111111',
+            'contact_name' => 'Ana Torres',
+            'email' => 'ana@cliente.test',
+            'phone' => '+51 900111222',
+            'address' => 'Lima',
+            'notes' => 'Cliente recurrente',
+            'is_active' => '1',
+        ])->assertRedirect('/admin/clientes');
+
+        $customer = Customer::query()->where('document_number', '20111111111')->firstOrFail();
+
+        $this->assertSame('Cliente Demo SAC', $customer->company_name);
+        $this->assertTrue($customer->is_active);
+
+        $this->put('/admin/clientes/'.$customer->id, [
+            'company_name' => 'Cliente Demo Renovado SAC',
+            'document_label' => 'RUC',
+            'document_number' => '20111111111',
+            'contact_name' => 'Ana Torres',
+            'email' => 'contacto@cliente.test',
+            'phone' => '+51 900111222',
+            'address' => 'Miraflores',
+            'notes' => 'Ficha actualizada',
+        ])->assertRedirect('/admin/clientes');
+
+        $customer->refresh();
+
+        $this->assertSame('Cliente Demo Renovado SAC', $customer->company_name);
+        $this->assertSame('contacto@cliente.test', $customer->email);
+        $this->assertFalse($customer->is_active);
+
+        $this->delete('/admin/clientes/'.$customer->id)
+            ->assertRedirect('/admin/clientes');
+
+        $this->assertDatabaseMissing('customers', ['id' => $customer->id]);
+    }
+
+    public function test_quotation_can_be_linked_to_customer_without_requiring_the_relation(): void
+    {
+        $this->seed();
+        $this->signInAsAdmin();
+
+        $currency = Currency::query()->create([
+            'name' => 'Sol peruano',
+            'code' => 'PEN',
+            'symbol' => 'S/',
+            'is_active' => true,
+        ]);
+
+        QuotationSetting::current()->update([
+            'company_name' => 'Echos Peru SAC',
+            'default_currency_id' => $currency->id,
+            'default_validity_days' => 15,
+        ]);
+
+        $customer = Customer::query()->create([
+            'company_name' => 'Cliente Relacionado SAC',
+            'document_label' => 'RUC',
+            'document_number' => '20999999999',
+            'email' => 'ventas@cliente.test',
+            'phone' => '+51 900999888',
+            'address' => 'Lima',
+            'is_active' => true,
+        ]);
+
+        $this->get('/admin/cotizaciones/nueva')
+            ->assertOk()
+            ->assertSee('Cliente manual / sin registro')
+            ->assertSee('Cliente Relacionado SAC');
+
+        $basePayload = [
+            'status' => 'draft',
+            'issue_date' => '2026-04-24',
+            'valid_until' => '2026-05-10',
+            'title' => 'Cotizacion de prueba',
+            'summary' => 'Documento comercial.',
+            'client_company_name' => 'Cliente Relacionado SAC',
+            'client_document_label' => 'RUC',
+            'client_document_number' => '20999999999',
+            'client_email' => 'ventas@cliente.test',
+            'client_phone' => '+51 900999888',
+            'client_address' => 'Lima',
+            'currency_id' => $currency->id,
+            'tax_rate' => '0.00',
+            'line_items' => [
+                [
+                    'quotation_item_id' => '',
+                    'catalog_lookup' => '',
+                    'name' => 'Servicio mensual',
+                    'description' => 'Soporte operativo.',
+                    'quantity' => '1',
+                    'unit_label' => 'mes',
+                    'unit_price' => '500.00',
+                    'discount_amount' => '0.00',
+                ],
+            ],
+            'work_sections' => [],
+        ];
+
+        $this->post('/admin/cotizaciones', array_merge($basePayload, [
+            'number' => 'COT-CLIENTE-0001',
+            'customer_id' => $customer->id,
+        ]))->assertRedirect('/admin/cotizaciones');
+
+        $linkedQuotation = Quotation::query()->where('number', 'COT-CLIENTE-0001')->firstOrFail();
+
+        $this->assertSame($customer->id, $linkedQuotation->customer_id);
+        $this->assertSame('Cliente Relacionado SAC', $linkedQuotation->client_company_name);
+
+        $this->post('/admin/cotizaciones', array_merge($basePayload, [
+            'number' => 'COT-MANUAL-0001',
+            'customer_id' => '',
+            'client_company_name' => 'Cliente Manual SAS',
+            'client_document_number' => '900111222',
+        ]))->assertRedirect('/admin/cotizaciones');
+
+        $manualQuotation = Quotation::query()->where('number', 'COT-MANUAL-0001')->firstOrFail();
+
+        $this->assertNull($manualQuotation->customer_id);
+        $this->assertSame('Cliente Manual SAS', $manualQuotation->client_company_name);
+    }
+
     public function test_quotation_can_be_created_with_catalog_items_manual_items_and_work_plan(): void
     {
         $this->seed();
@@ -302,9 +438,9 @@ class QuotationModuleTest extends TestCase
             'currency_id' => $currency->id,
             'work_start_date' => '2026-04-25',
             'work_end_date' => '2026-06-30',
-            'estimated_hours' => '384.00',
-            'estimated_days' => '48.00',
-            'hours_per_day' => '8.00',
+            'estimated_hours' => '384',
+            'estimated_days' => '48',
+            'hours_per_day' => '8',
             'tax_rate' => '10.00',
             'notes' => 'Notas del proyecto',
             'terms_and_conditions' => 'Terminos comerciales',
@@ -346,12 +482,12 @@ class QuotationModuleTest extends TestCase
                         [
                             'name' => 'Formulario de creacion y edicion',
                             'description' => 'Alta y actualizacion de cotizaciones con items.',
-                            'duration_days' => '1.00',
+                            'duration_days' => '1',
                         ],
                         [
                             'name' => 'Configuracion de cotizaciones',
                             'description' => 'Numeracion, vigencia por defecto y terminos.',
-                            'duration_days' => '1.00',
+                            'duration_days' => '1',
                         ],
                     ],
                 ],
@@ -368,6 +504,9 @@ class QuotationModuleTest extends TestCase
         $this->assertSame('3200.00', (string) $quotation->subtotal);
         $this->assertSame('100.00', (string) $quotation->discount_total);
         $this->assertSame('310.00', (string) $quotation->tax_total);
+        $this->assertSame('16.00', (string) $quotation->estimated_hours);
+        $this->assertSame('2.00', (string) $quotation->estimated_days);
+        $this->assertSame('8.00', (string) $quotation->hours_per_day);
         $this->assertSame('Echos Peru SAC', $quotation->issuer_snapshot['company_name']);
         $this->assertCount(2, $quotation->lineItems);
         $this->assertSame('catalog', $quotation->lineItems[0]->source_type);
@@ -458,6 +597,9 @@ class QuotationModuleTest extends TestCase
             'client_phone' => '+51 900000000',
             'client_address' => 'Lima',
             'currency_id' => $currency->id,
+            'estimated_hours' => '999',
+            'estimated_days' => '999',
+            'hours_per_day' => '6',
             'tax_rate' => '10.00',
             'notes' => 'Notas actualizadas',
             'terms_and_conditions' => 'Terminos actualizados',
@@ -477,16 +619,36 @@ class QuotationModuleTest extends TestCase
                     'discount_amount' => '0.00',
                 ],
             ],
-            'work_sections' => [],
+            'work_sections' => [
+                [
+                    'title' => 'Plan actualizado',
+                    'tasks' => [
+                        [
+                            'name' => 'Relevamiento',
+                            'description' => 'Revision de alcance.',
+                            'duration_days' => '2',
+                        ],
+                        [
+                            'name' => 'Ejecucion',
+                            'description' => 'Ajustes finales.',
+                            'duration_days' => '3',
+                        ],
+                    ],
+                ],
+            ],
         ])->assertRedirect('/admin/cotizaciones');
 
         $quotation->refresh();
-        $quotation->load('lineItems');
+        $quotation->load(['lineItems', 'workSections.tasks']);
 
         $this->assertCount(1, $quotation->lineItems);
         $this->assertSame('Capacitacion avanzada', $quotation->lineItems[0]->name);
         $this->assertSame($lineImagePath, $quotation->lineItems[0]->image_path);
         $this->assertSame('uploaded', $quotation->lineItems[0]->image_source);
+        $this->assertSame('30.00', (string) $quotation->estimated_hours);
+        $this->assertSame('5.00', (string) $quotation->estimated_days);
+        $this->assertSame('6.00', (string) $quotation->hours_per_day);
+        $this->assertCount(2, $quotation->workSections[0]->tasks);
         Storage::disk('quote_media')->assertExists($lineImagePath);
     }
 

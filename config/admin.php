@@ -74,6 +74,11 @@ return [
                     'description' => 'Pedidos, estados y seguimiento.',
                 ],
                 [
+                    'label' => 'Clientes',
+                    'route' => 'admin.customers.index',
+                    'description' => 'Datos comerciales reutilizables.',
+                ],
+                [
                     'label' => 'Cotizaciones',
                     'route' => 'admin.quotations.index',
                     'description' => 'Documentos comerciales con cliente, items y terminos.',

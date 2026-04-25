@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Currency;
+use App\Models\Customer;
 use App\Models\Quotation;
 use App\Models\QuotationItem;
 use App\Models\QuotationSetting;
@@ -28,7 +29,7 @@ class QuotationController extends Controller
         $settings = QuotationSetting::current()->loadMissing('defaultCurrency');
 
         $quotations = Quotation::query()
-            ->with(['currency', 'lineItems'])
+            ->with(['currency', 'customer', 'lineItems'])
             ->orderByDesc('issue_date')
             ->orderByDesc('id')
             ->get()
@@ -42,6 +43,8 @@ class QuotationController extends Controller
                     'valid_until' => $quotation->valid_until?->format('d/m/Y') ?? 'Sin fecha',
                     'title' => $quotation->title,
                     'client_company_name' => $quotation->client_company_name,
+                    'customer_id' => $quotation->customer_id,
+                    'customer_label' => $quotation->customer ? 'Registrado' : 'Manual',
                     'currency_label' => $quotation->currency?->code ?? 'Sin moneda',
                     'total' => $quotation->total,
                     'total_label' => $this->formatMoney(
@@ -107,6 +110,7 @@ class QuotationController extends Controller
     {
         $quotation->load([
             'currency',
+            'customer',
             'lineItems.catalogItem.currency',
             'workSections.tasks',
         ]);
@@ -195,6 +199,27 @@ class QuotationController extends Controller
             })
             ->values();
 
+        $customerOptions = Customer::query()
+            ->orderByDesc('is_active')
+            ->orderBy('company_name')
+            ->get()
+            ->map(static fn (Customer $customer): array => [
+                'id' => $customer->id,
+                'company_name' => $customer->company_name,
+                'document_label' => $customer->document_label,
+                'document_number' => $customer->document_number,
+                'contact_name' => $customer->contact_name,
+                'email' => $customer->email,
+                'phone' => $customer->phone,
+                'address' => $customer->address,
+                'is_active' => $customer->is_active,
+                'label' => collect([
+                    $customer->company_name,
+                    trim($customer->document_label.' '.($customer->document_number ?? '')),
+                ])->filter()->implode(' - '),
+            ])
+            ->values();
+
         $quotationData = $quotation
             ? $this->serializeQuotation($quotation)
             : $this->defaultQuotationData($settings);
@@ -217,6 +242,7 @@ class QuotationController extends Controller
                 'default_signer_title' => $settings->default_signer_title,
             ],
             'catalogItems' => $catalogItems,
+            'customerOptions' => $customerOptions,
             'currencyOptions' => $currencies,
             'statusOptions' => $this->statusOptions(),
             'formAction' => $quotation
@@ -245,6 +271,12 @@ class QuotationController extends Controller
             : [];
         $lineItems = $this->prepareLineItems($request);
         $workSections = $this->normalizeWorkSections($request->input('work_sections', []));
+        $workTime = $this->calculateWorkTime(
+            $workSections,
+            $validated['hours_per_day'] ?? null,
+            $validated['estimated_days'] ?? null,
+            $validated['estimated_hours'] ?? null,
+        );
         $taxRate = $this->normalizeDecimal($validated['tax_rate'] ?? $settings->default_tax_rate ?? 0);
         $issueDate = $validated['issue_date'];
         $validUntil = $validated['valid_until']
@@ -258,12 +290,13 @@ class QuotationController extends Controller
             $settings,
             $lineItems,
             $workSections,
+            $workTime,
             $taxRate,
             $issueDate,
             $validUntil,
             $totals
         ): void {
-            $model = $quotation ?? new Quotation();
+            $model = $quotation ?? new Quotation;
 
             $model->fill([
                 'number' => $this->resolveQuotationNumber($validated, $model),
@@ -272,6 +305,7 @@ class QuotationController extends Controller
                 'valid_until' => $validUntil,
                 'title' => $validated['title'],
                 'summary' => $validated['summary'] ?? null,
+                'customer_id' => $validated['customer_id'] ?? null,
                 'client_company_name' => $validated['client_company_name'],
                 'client_document_label' => $validated['client_document_label'] ?: 'RUC',
                 'client_document_number' => $validated['client_document_number'] ?? null,
@@ -281,9 +315,9 @@ class QuotationController extends Controller
                 'currency_id' => $validated['currency_id'] ?? $settings->default_currency_id,
                 'work_start_date' => $validated['work_start_date'] ?? null,
                 'work_end_date' => $validated['work_end_date'] ?? null,
-                'estimated_hours' => $this->nullableDecimal($validated['estimated_hours'] ?? null),
-                'estimated_days' => $this->nullableDecimal($validated['estimated_days'] ?? null),
-                'hours_per_day' => $this->nullableDecimal($validated['hours_per_day'] ?? null),
+                'estimated_hours' => $workTime['estimated_hours'],
+                'estimated_days' => $workTime['estimated_days'],
+                'hours_per_day' => $workTime['hours_per_day'],
                 'subtotal' => $totals['subtotal'],
                 'discount_total' => $totals['discount_total'],
                 'tax_rate' => $taxRate,
@@ -341,6 +375,7 @@ class QuotationController extends Controller
             'valid_until' => ['nullable', 'date', 'after_or_equal:issue_date'],
             'title' => ['required', 'string', 'max:255'],
             'summary' => ['nullable', 'string', 'max:10000'],
+            'customer_id' => ['nullable', 'integer', 'exists:customers,id'],
             'client_company_name' => ['required', 'string', 'max:255'],
             'client_document_label' => ['required', 'string', 'max:50'],
             'client_document_number' => ['nullable', 'string', 'max:50'],
@@ -350,9 +385,9 @@ class QuotationController extends Controller
             'currency_id' => ['nullable', 'integer', 'exists:currencies,id'],
             'work_start_date' => ['nullable', 'date'],
             'work_end_date' => ['nullable', 'date', 'after_or_equal:work_start_date'],
-            'estimated_hours' => ['nullable', 'numeric', 'min:0'],
-            'estimated_days' => ['nullable', 'numeric', 'min:0'],
-            'hours_per_day' => ['nullable', 'numeric', 'min:0'],
+            'estimated_hours' => ['nullable', 'integer', 'min:0'],
+            'estimated_days' => ['nullable', 'integer', 'min:0'],
+            'hours_per_day' => ['nullable', 'integer', 'min:0'],
             'tax_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'notes' => ['nullable', 'string', 'max:20000'],
             'terms_and_conditions' => ['nullable', 'string', 'max:20000'],
@@ -363,7 +398,7 @@ class QuotationController extends Controller
             'line_items.*.description' => ['nullable', 'string', 'max:5000'],
             'line_items.*.specifications_text' => ['nullable', 'string', 'max:10000'],
             'line_items.*.image' => ['nullable', 'image', 'max:4096'],
-            'line_items.*.quantity' => ['nullable', 'numeric', 'gt:0'],
+            'line_items.*.quantity' => ['nullable', 'integer', 'gt:0'],
             'line_items.*.unit_label' => ['nullable', 'string', 'max:50'],
             'line_items.*.unit_price' => ['nullable', 'numeric', 'min:0'],
             'line_items.*.discount_amount' => ['nullable', 'numeric', 'min:0'],
@@ -372,7 +407,7 @@ class QuotationController extends Controller
             'work_sections.*.tasks' => ['nullable', 'array'],
             'work_sections.*.tasks.*.name' => ['nullable', 'string', 'max:255'],
             'work_sections.*.tasks.*.description' => ['nullable', 'string', 'max:5000'],
-            'work_sections.*.tasks.*.duration_days' => ['nullable', 'numeric', 'min:0'],
+            'work_sections.*.tasks.*.duration_days' => ['nullable', 'integer', 'min:0'],
         ]);
 
         $validator->after(function ($validator) use ($request): void {
@@ -472,6 +507,7 @@ class QuotationController extends Controller
             'valid_until' => now()->addDays((int) ($settings->default_validity_days ?? 15))->toDateString(),
             'title' => '',
             'summary' => '',
+            'customer_id' => '',
             'client_company_name' => '',
             'client_document_label' => 'RUC',
             'client_document_number' => '',
@@ -483,7 +519,7 @@ class QuotationController extends Controller
             'work_end_date' => '',
             'estimated_hours' => '',
             'estimated_days' => '',
-            'hours_per_day' => '8.00',
+            'hours_per_day' => '8',
             'tax_rate' => $settings->default_tax_rate,
             'notes' => $settings->default_notes,
             'terms_and_conditions' => $settings->default_terms,
@@ -501,6 +537,7 @@ class QuotationController extends Controller
             'valid_until' => $quotation->valid_until?->toDateString(),
             'title' => $quotation->title,
             'summary' => $quotation->summary,
+            'customer_id' => $quotation->customer_id,
             'client_company_name' => $quotation->client_company_name,
             'client_document_label' => $quotation->client_document_label,
             'client_document_number' => $quotation->client_document_number,
@@ -654,7 +691,7 @@ class QuotationController extends Controller
                         return [
                             'name' => $name,
                             'description' => filled($description) ? $description : null,
-                            'duration_days' => $this->nullableDecimal($task['duration_days'] ?? null),
+                            'duration_days' => $this->nullableInteger($task['duration_days'] ?? null),
                         ];
                     })
                     ->filter()
@@ -679,6 +716,24 @@ class QuotationController extends Controller
                 'sort_order' => $index + 1,
             ])
             ->all();
+    }
+
+    private function calculateWorkTime(array $workSections, mixed $hoursPerDay, mixed $fallbackDays, mixed $fallbackHours): array
+    {
+        $durationDays = collect($workSections)
+            ->flatMap(static fn (array $section): array => $section['tasks'] ?? [])
+            ->sum(static fn (array $task): int => (int) ($task['duration_days'] ?? 0));
+        $normalizedHoursPerDay = $this->nullableInteger($hoursPerDay);
+        $estimatedDays = $durationDays > 0 ? $durationDays : $this->nullableInteger($fallbackDays);
+        $estimatedHours = $estimatedDays !== null && $normalizedHoursPerDay !== null
+            ? $estimatedDays * $normalizedHoursPerDay
+            : $this->nullableInteger($fallbackHours);
+
+        return [
+            'estimated_hours' => $estimatedHours,
+            'estimated_days' => $estimatedDays,
+            'hours_per_day' => $normalizedHoursPerDay,
+        ];
     }
 
     private function calculateTotals(array $lineItems, float $taxRate): array
@@ -751,9 +806,9 @@ class QuotationController extends Controller
         return round((float) ($value ?: 0), 2);
     }
 
-    private function nullableDecimal(mixed $value): ?float
+    private function nullableInteger(mixed $value): ?int
     {
-        return filled($value) ? $this->normalizeDecimal($value) : null;
+        return filled($value) ? max((int) round((float) $value), 0) : null;
     }
 
     private function emptyLineItem(): array
@@ -768,7 +823,7 @@ class QuotationController extends Controller
             'image_source' => '',
             'image_url' => '',
             'remove_image' => '0',
-            'quantity' => '1.00',
+            'quantity' => '1',
             'unit_label' => '',
             'unit_price' => '',
             'discount_amount' => '0.00',

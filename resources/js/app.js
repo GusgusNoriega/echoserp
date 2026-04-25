@@ -317,6 +317,7 @@ const formatQuotationAmount = (value) => new Intl.NumberFormat('es-PE', {
 const initializeQuotationEditors = () => {
     document.querySelectorAll('[data-quotation-editor]').forEach((form) => {
         let catalogItems = [];
+        let customers = [];
 
         try {
             catalogItems = JSON.parse(form.dataset.catalogItems ?? '[]');
@@ -324,15 +325,28 @@ const initializeQuotationEditors = () => {
             catalogItems = [];
         }
 
+        try {
+            customers = JSON.parse(form.dataset.customers ?? '[]');
+        } catch (error) {
+            customers = [];
+        }
+
         const catalogMap = new Map(
             catalogItems.map((item) => [String(item.lookup_label ?? '').trim(), item]),
         );
+        const customerMap = new Map(
+            customers.map((customer) => [String(customer.id ?? ''), customer]),
+        );
 
+        const customerSelect = form.querySelector('[data-customer-select]');
         const lineItemList = form.querySelector('[data-line-item-list]');
         const workSectionList = form.querySelector('[data-work-section-list]');
         const lineItemTemplate = form.querySelector('[data-line-item-template]');
         const workSectionTemplate = form.querySelector('[data-work-section-template]');
         const workTaskTemplate = form.querySelector('[data-work-task-template]');
+        const estimatedHoursInput = form.querySelector('[data-estimated-hours]');
+        const estimatedDaysInput = form.querySelector('[data-estimated-days]');
+        const hoursPerDayInput = form.querySelector('[data-hours-per-day]');
         const taxRateInput = form.querySelector('[data-tax-rate]');
         const subtotalTarget = form.querySelector('[data-summary-subtotal]');
         const discountTarget = form.querySelector('[data-summary-discount]');
@@ -343,10 +357,106 @@ const initializeQuotationEditors = () => {
             return;
         }
 
+        const applyCustomer = (customerId) => {
+            const customer = customerMap.get(String(customerId ?? ''));
+
+            if (!customer) {
+                return;
+            }
+
+            const fields = {
+                '[data-customer-company]': customer.company_name ?? '',
+                '[data-customer-document-label]': customer.document_label ?? 'RUC',
+                '[data-customer-document-number]': customer.document_number ?? '',
+                '[data-customer-email]': customer.email ?? '',
+                '[data-customer-phone]': customer.phone ?? '',
+                '[data-customer-address]': customer.address ?? '',
+            };
+
+            Object.entries(fields).forEach(([selector, value]) => {
+                const input = form.querySelector(selector);
+
+                if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement || input instanceof HTMLSelectElement) {
+                    input.value = value;
+                }
+            });
+        };
+
         const readDecimal = (input) => {
             const parsed = Number.parseFloat(input?.value ?? '0');
 
             return Number.isFinite(parsed) ? parsed : 0;
+        };
+
+        const readInteger = (input) => {
+            const parsed = Number.parseInt(input?.value ?? '0', 10);
+
+            return Number.isFinite(parsed) ? parsed : 0;
+        };
+
+        const normalizeWholeNumberInput = (input) => {
+            if (!(input instanceof HTMLInputElement) || input.value === '') {
+                return;
+            }
+
+            const parsed = Number.parseFloat(input.value);
+
+            if (!Number.isFinite(parsed)) {
+                input.value = '';
+                return;
+            }
+
+            const min = input.min === '' ? null : Number.parseInt(input.min, 10);
+            const rounded = Math.round(parsed);
+            const normalized = Number.isFinite(min) ? Math.max(rounded, min) : rounded;
+
+            input.value = String(Math.max(normalized, 0));
+        };
+
+        const bindWholeNumberInput = (input) => {
+            if (!(input instanceof HTMLInputElement) || input.dataset.wholeNumberBound) {
+                return;
+            }
+
+            input.dataset.wholeNumberBound = 'true';
+            input.addEventListener('change', () => {
+                normalizeWholeNumberInput(input);
+            });
+            input.addEventListener('blur', () => {
+                normalizeWholeNumberInput(input);
+            });
+        };
+
+        const bindWholeNumberInputs = (target = form) => {
+            target.querySelectorAll('[data-whole-number]').forEach(bindWholeNumberInput);
+        };
+
+        const syncWorkTime = () => {
+            const durationDays = Array.from(workSectionList.querySelectorAll('[data-task-duration]'))
+                .reduce((carry, input) => carry + Math.max(readInteger(input), 0), 0);
+            const hoursPerDay = Math.max(readInteger(hoursPerDayInput), 0);
+            const wasCalculatedFromTasks = estimatedDaysInput?.dataset.calculatedFromTasks === 'true';
+            let days = durationDays > 0 ? durationDays : Math.max(readInteger(estimatedDaysInput), 0);
+
+            if (estimatedDaysInput && durationDays > 0) {
+                estimatedDaysInput.value = String(durationDays);
+                estimatedDaysInput.dataset.calculatedFromTasks = 'true';
+                days = durationDays;
+            } else if (estimatedDaysInput && wasCalculatedFromTasks) {
+                estimatedDaysInput.value = '';
+                delete estimatedDaysInput.dataset.calculatedFromTasks;
+                days = 0;
+            }
+
+            if (!estimatedHoursInput) {
+                return;
+            }
+
+            if (days > 0 && hoursPerDay > 0) {
+                estimatedHoursInput.value = String(days * hoursPerDay);
+            } else if (durationDays > 0 || wasCalculatedFromTasks) {
+                estimatedHoursInput.value = '';
+            }
         };
 
         const releaseLineItemPreviewUrl = (lineItem) => {
@@ -545,6 +655,8 @@ const initializeQuotationEditors = () => {
             const imageRemoveInput = lineItem.querySelector('[data-line-image-remove]');
             const clearImageButton = lineItem.querySelector('[data-clear-line-image]');
 
+            bindWholeNumberInput(quantityInput);
+
             if (lookupInput) {
                 const onLookupChange = () => {
                     applyCatalogItem(lineItem, lookupInput.value);
@@ -662,6 +774,15 @@ const initializeQuotationEditors = () => {
 
         const bindWorkTask = (task) => {
             const removeButton = task.querySelector('[data-remove-work-task]');
+            const durationInput = task.querySelector('[data-task-duration]');
+
+            bindWholeNumberInput(durationInput);
+
+            durationInput?.addEventListener('input', syncWorkTime);
+            durationInput?.addEventListener('change', () => {
+                normalizeWholeNumberInput(durationInput);
+                syncWorkTime();
+            });
 
             removeButton?.addEventListener('click', () => {
                 const section = task.closest('[data-work-section]');
@@ -672,6 +793,8 @@ const initializeQuotationEditors = () => {
                 if (section && list && !list.querySelector('[data-work-task]')) {
                     addWorkTask(section);
                 }
+
+                syncWorkTime();
             });
         };
 
@@ -701,6 +824,7 @@ const initializeQuotationEditors = () => {
                     bindWorkTask(task);
                 }
             });
+            syncWorkTime();
         };
 
         const bindWorkSection = (section) => {
@@ -713,6 +837,7 @@ const initializeQuotationEditors = () => {
 
             removeSectionButton?.addEventListener('click', () => {
                 section.remove();
+                syncWorkTime();
             });
 
             section.querySelectorAll('[data-work-task]').forEach((task) => {
@@ -741,11 +866,26 @@ const initializeQuotationEditors = () => {
                     bindWorkSection(section);
                 }
             });
+            syncWorkTime();
         };
+
+        customerSelect?.addEventListener('change', () => {
+            applyCustomer(customerSelect.value);
+        });
 
         form.querySelector('[data-add-line-item]')?.addEventListener('click', addLineItem);
         form.querySelector('[data-add-work-section]')?.addEventListener('click', addWorkSection);
         taxRateInput?.addEventListener('input', syncSummary);
+        hoursPerDayInput?.addEventListener('input', syncWorkTime);
+        hoursPerDayInput?.addEventListener('change', () => {
+            normalizeWholeNumberInput(hoursPerDayInput);
+            syncWorkTime();
+        });
+        form.addEventListener('submit', () => {
+            bindWholeNumberInputs(form);
+            form.querySelectorAll('[data-whole-number]').forEach(normalizeWholeNumberInput);
+            syncWorkTime();
+        });
 
         lineItemList.querySelectorAll('[data-line-item]').forEach((lineItem) => {
             if (!lineItem.dataset.bound) {
@@ -761,6 +901,8 @@ const initializeQuotationEditors = () => {
             }
         });
 
+        bindWholeNumberInputs(form);
+        syncWorkTime();
         syncSummary();
     });
 };
