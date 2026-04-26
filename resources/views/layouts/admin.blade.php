@@ -74,7 +74,7 @@
                         @if ($currentUser)
                             <div class="topbar-user">
                                 <div class="topbar-user__identity">
-                                    <span>Sesion activa</span>
+                                    <span>Sesión activa</span>
                                     <strong>{{ $currentUser->name }}</strong>
                                     <small>{{ $currentUser->email }}</small>
                                 </div>
