@@ -148,6 +148,17 @@ const normalizeSlugPart = (value, separator = '-') => {
         .replace(new RegExp(`^${escapedSeparator}|${escapedSeparator}$`, 'g'), '');
 };
 
+document.addEventListener('wheel', (event) => {
+    const target = event.target;
+
+    if (!(target instanceof HTMLInputElement) || target.type !== 'number' || document.activeElement !== target) {
+        return;
+    }
+
+    event.preventDefault();
+    target.blur();
+}, { passive: false });
+
 applyTheme({
     mode: resolveMode(),
     accent: resolveAccent(),

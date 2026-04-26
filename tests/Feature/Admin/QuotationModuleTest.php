@@ -217,6 +217,7 @@ class QuotationModuleTest extends TestCase
 
         $this->assertSame('unidad', $item->unit_label);
         $this->assertSame(['Pantalla tactil', 'Bateria extendida'], $item->specifications);
+        $this->assertSame('1500.50', (string) $item->price);
         $this->assertNotNull($originalPath);
         Storage::disk('quote_media')->assertExists($originalPath);
 
@@ -239,6 +240,7 @@ class QuotationModuleTest extends TestCase
         $this->assertSame('Terminal portatil avanzada', $item->name);
         $this->assertSame('servicio', $item->unit_label);
         $this->assertSame(['Capacidad 64 GB', 'Garantia 1 ano'], $item->specifications);
+        $this->assertSame('1899.90', (string) $item->price);
         $this->assertNotSame($originalPath, $item->image_path);
         Storage::disk('quote_media')->assertMissing($originalPath);
         Storage::disk('quote_media')->assertExists($item->image_path);
@@ -250,6 +252,53 @@ class QuotationModuleTest extends TestCase
 
         $this->assertDatabaseMissing('quotation_items', ['id' => $item->id]);
         Storage::disk('quote_media')->assertMissing($currentPath);
+    }
+
+    public function test_catalog_item_preserves_whole_number_price_when_created_and_updated(): void
+    {
+        $this->seed();
+        $this->signInAsAdmin();
+
+        $currency = Currency::query()->create([
+            'name' => 'Sol peruano',
+            'code' => 'PEN',
+            'symbol' => 'S/',
+            'is_active' => true,
+        ]);
+
+        $this->post('/admin/cotizaciones/catalogo/items', [
+            'type' => 'product',
+            'name' => 'Stand para feria',
+            'description' => 'Stand modular para eventos comerciales.',
+            'unit_label' => 'unidad',
+            'specifications_text' => "Estructura modular\nPaneleria grafica",
+            'price' => '200',
+            'currency_id' => $currency->id,
+            'is_active' => '1',
+        ])->assertRedirect('/admin/cotizaciones/catalogo');
+
+        $item = QuotationItem::query()->where('name', 'Stand para feria')->firstOrFail();
+
+        $this->assertSame('200.00', (string) $item->price);
+
+        $this->put('/admin/cotizaciones/catalogo/items/'.$item->id, [
+            'type' => 'product',
+            'name' => 'Stand para feria actualizado',
+            'description' => 'Stand modular para eventos comerciales actualizado.',
+            'unit_label' => 'unidad',
+            'specifications_text' => "Estructura modular\nPaneleria grafica\nLuces incluidas",
+            'price' => '200',
+            'currency_id' => $currency->id,
+            'is_active' => '1',
+        ])->assertRedirect('/admin/cotizaciones/catalogo');
+
+        $item->refresh();
+
+        $this->assertSame('200.00', (string) $item->price);
+
+        $this->get('/admin/cotizaciones/catalogo')
+            ->assertOk()
+            ->assertSee('S/ 200,00 PEN');
     }
 
     public function test_customer_records_can_be_created_updated_and_deleted(): void
