@@ -363,6 +363,14 @@
                         <span class="meta-value">{{ $formatMoney($quotation->total) }}</span>
                     </td>
                 </tr>
+                @if ($quotation->hide_work_plan && $quotation->work_start_date)
+                    <tr>
+                        <td colspan="4">
+                            <span class="meta-label">Inicio estimado</span>
+                            <span class="meta-value">{{ $formatDate($quotation->work_start_date) }}</span>
+                        </td>
+                    </tr>
+                @endif
             </table>
         </div>
 
@@ -460,52 +468,54 @@
             @endforeach
         </div>
 
-        <div class="section">
-            <h2 class="section-title">Plan de trabajo</h2>
-            <table class="meta-table">
-                <tr>
-                    <td>
-                        <span class="meta-label">Inicio estimado</span>
-                        <span class="meta-value">{{ $formatDate($quotation->work_start_date) }}</span>
-                    </td>
-                    <td>
-                        <span class="meta-label">Entrega estimada</span>
-                        <span class="meta-value">{{ $formatDate($quotation->work_end_date) }}</span>
-                    </td>
-                    <td>
-                        <span class="meta-label">Horas estimadas</span>
-                        <span class="meta-value">{{ $formatDecimal($quotation->estimated_hours) }}</span>
-                    </td>
-                    <td>
-                        <span class="meta-label">Dias estimados</span>
-                        <span class="meta-value">{{ $formatDecimal($quotation->estimated_days) }}</span>
-                    </td>
-                </tr>
-            </table>
+        @if (! $quotation->hide_work_plan)
+            <div class="section">
+                <h2 class="section-title">Plan de trabajo</h2>
+                <table class="meta-table">
+                    <tr>
+                        <td>
+                            <span class="meta-label">Inicio estimado</span>
+                            <span class="meta-value">{{ $formatDate($quotation->work_start_date) }}</span>
+                        </td>
+                        <td>
+                            <span class="meta-label">Entrega estimada</span>
+                            <span class="meta-value">{{ $formatDate($quotation->work_end_date) }}</span>
+                        </td>
+                        <td>
+                            <span class="meta-label">Horas estimadas</span>
+                            <span class="meta-value">{{ $formatDecimal($quotation->estimated_hours) }}</span>
+                        </td>
+                        <td>
+                            <span class="meta-label">Dias estimados</span>
+                            <span class="meta-value">{{ $formatDecimal($quotation->estimated_days) }}</span>
+                        </td>
+                    </tr>
+                </table>
 
-            @foreach ($quotation->workSections as $section)
-                <div class="work-section">
-                    <div class="work-section-title">{{ $section->title }}</div>
+                @foreach ($quotation->workSections as $section)
+                    <div class="work-section">
+                        <div class="work-section-title">{{ $section->title }}</div>
 
-                    @if ($section->tasks->isNotEmpty())
-                        <table class="work-table">
-                            <tr>
-                                <th style="width: 32%;">Tarea</th>
-                                <th>Detalle</th>
-                                <th style="width: 18%;">Duracion</th>
-                            </tr>
-                            @foreach ($section->tasks as $task)
+                        @if ($section->tasks->isNotEmpty())
+                            <table class="work-table">
                                 <tr>
-                                    <td><strong>{{ $task->name }}</strong></td>
-                                    <td>{{ $task->description ?: '-' }}</td>
-                                    <td>{{ filled($task->duration_days) ? $formatDecimal($task->duration_days).' dias' : '-' }}</td>
+                                    <th style="width: 32%;">Tarea</th>
+                                    <th>Detalle</th>
+                                    <th style="width: 18%;">Duracion</th>
                                 </tr>
-                            @endforeach
-                        </table>
-                    @endif
-                </div>
-            @endforeach
-        </div>
+                                @foreach ($section->tasks as $task)
+                                    <tr>
+                                        <td><strong>{{ $task->name }}</strong></td>
+                                        <td>{{ $task->description ?: '-' }}</td>
+                                        <td>{{ filled($task->duration_days) ? $formatDecimal($task->duration_days).' dias' : '-' }}</td>
+                                    </tr>
+                                @endforeach
+                            </table>
+                        @endif
+                    </div>
+                @endforeach
+            </div>
+        @endif
 
         <div class="section">
             <div class="totals-wrap">

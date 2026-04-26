@@ -437,6 +437,7 @@ class QuotationModuleTest extends TestCase
             'client_address' => 'Lima',
             'currency_id' => $currency->id,
             'work_start_date' => '2026-04-25',
+            'hide_work_plan' => '0',
             'work_end_date' => '2026-06-30',
             'estimated_hours' => '384',
             'estimated_days' => '48',
@@ -523,6 +524,87 @@ class QuotationModuleTest extends TestCase
         $this->assertCount(2, $quotation->workSections[0]->tasks);
     }
 
+    public function test_simple_quotation_can_hide_work_plan_and_time_estimates(): void
+    {
+        $this->seed();
+        $this->signInAsAdmin();
+
+        $currency = Currency::query()->create([
+            'name' => 'Sol peruano',
+            'code' => 'PEN',
+            'symbol' => 'S/',
+            'is_active' => true,
+        ]);
+
+        QuotationSetting::current()->update([
+            'company_name' => 'Echos Peru SAC',
+            'default_currency_id' => $currency->id,
+            'default_validity_days' => 15,
+        ]);
+
+        $this->get('/admin/cotizaciones/nueva')
+            ->assertOk()
+            ->assertSee('Desactivar plan de trabajo y tiempo estimado')
+            ->assertSee('data-hide-work-plan-toggle checked', false);
+
+        $this->post('/admin/cotizaciones', [
+            'number' => 'COT-SIMPLE-0001',
+            'status' => 'draft',
+            'issue_date' => '2026-04-24',
+            'valid_until' => '2026-05-10',
+            'title' => 'Cotizacion simple',
+            'summary' => 'Documento comercial sin plan detallado.',
+            'client_company_name' => 'Cliente Simple SAC',
+            'client_document_label' => 'RUC',
+            'client_document_number' => '20111111111',
+            'currency_id' => $currency->id,
+            'work_start_date' => '2026-04-28',
+            'hide_work_plan' => '1',
+            'work_end_date' => '2026-05-30',
+            'estimated_hours' => '999',
+            'estimated_days' => '999',
+            'hours_per_day' => '8',
+            'tax_rate' => '0.00',
+            'line_items' => [
+                [
+                    'quotation_item_id' => '',
+                    'catalog_lookup' => '',
+                    'name' => 'Servicio puntual',
+                    'description' => 'Entrega sencilla.',
+                    'quantity' => '1',
+                    'unit_label' => 'servicio',
+                    'unit_price' => '300.00',
+                    'discount_amount' => '0.00',
+                ],
+            ],
+            'work_sections' => [
+                [
+                    'title' => 'No debe guardarse',
+                    'tasks' => [
+                        [
+                            'name' => 'Tarea oculta',
+                            'description' => 'No aplica.',
+                            'duration_days' => '4',
+                        ],
+                    ],
+                ],
+            ],
+        ])->assertRedirect('/admin/cotizaciones');
+
+        $quotation = Quotation::query()
+            ->where('number', 'COT-SIMPLE-0001')
+            ->with('workSections.tasks')
+            ->firstOrFail();
+
+        $this->assertTrue($quotation->hide_work_plan);
+        $this->assertSame('2026-04-28', $quotation->work_start_date?->toDateString());
+        $this->assertNull($quotation->work_end_date);
+        $this->assertNull($quotation->estimated_hours);
+        $this->assertNull($quotation->estimated_days);
+        $this->assertNull($quotation->hours_per_day);
+        $this->assertCount(0, $quotation->workSections);
+    }
+
     public function test_quotation_update_keeps_existing_line_item_image_when_not_reuploaded(): void
     {
         $this->seed();
@@ -597,6 +679,7 @@ class QuotationModuleTest extends TestCase
             'client_phone' => '+51 900000000',
             'client_address' => 'Lima',
             'currency_id' => $currency->id,
+            'hide_work_plan' => '0',
             'estimated_hours' => '999',
             'estimated_days' => '999',
             'hours_per_day' => '6',
@@ -694,6 +777,7 @@ class QuotationModuleTest extends TestCase
             'client_address' => 'Lima',
             'currency_id' => $currency->id,
             'work_start_date' => '2026-04-25',
+            'hide_work_plan' => false,
             'work_end_date' => '2026-05-30',
             'estimated_hours' => 80,
             'estimated_days' => 10,

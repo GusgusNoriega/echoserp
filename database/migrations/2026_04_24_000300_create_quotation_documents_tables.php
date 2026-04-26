@@ -53,6 +53,7 @@ return new class extends Migration
             $table->string('client_address', 500)->nullable();
             $table->foreignId('currency_id')->nullable()->constrained('currencies')->nullOnDelete();
             $table->date('work_start_date')->nullable();
+            $table->boolean('hide_work_plan')->default(true);
             $table->date('work_end_date')->nullable();
             $table->decimal('estimated_hours', 10, 2)->nullable();
             $table->decimal('estimated_days', 10, 2)->nullable();

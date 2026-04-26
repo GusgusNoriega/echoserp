@@ -265,18 +265,21 @@ class QuotationController extends Controller
         }
 
         $validated = $validator->validated();
+        $hideWorkPlan = $this->toBoolean($validated['hide_work_plan'] ?? false);
         $settings = QuotationSetting::current();
         $existingImagePaths = $quotation
             ? $quotation->lineItems()->pluck('image_path')->filter()->values()->all()
             : [];
         $lineItems = $this->prepareLineItems($request);
-        $workSections = $this->normalizeWorkSections($request->input('work_sections', []));
-        $workTime = $this->calculateWorkTime(
-            $workSections,
-            $validated['hours_per_day'] ?? null,
-            $validated['estimated_days'] ?? null,
-            $validated['estimated_hours'] ?? null,
-        );
+        $workSections = $hideWorkPlan ? [] : $this->normalizeWorkSections($request->input('work_sections', []));
+        $workTime = $hideWorkPlan
+            ? ['estimated_hours' => null, 'estimated_days' => null, 'hours_per_day' => null]
+            : $this->calculateWorkTime(
+                $workSections,
+                $validated['hours_per_day'] ?? null,
+                $validated['estimated_days'] ?? null,
+                $validated['estimated_hours'] ?? null,
+            );
         $taxRate = $this->normalizeDecimal($validated['tax_rate'] ?? $settings->default_tax_rate ?? 0);
         $issueDate = $validated['issue_date'];
         $validUntil = $validated['valid_until']
@@ -291,6 +294,7 @@ class QuotationController extends Controller
             $lineItems,
             $workSections,
             $workTime,
+            $hideWorkPlan,
             $taxRate,
             $issueDate,
             $validUntil,
@@ -314,7 +318,8 @@ class QuotationController extends Controller
                 'client_address' => $validated['client_address'] ?? null,
                 'currency_id' => $validated['currency_id'] ?? $settings->default_currency_id,
                 'work_start_date' => $validated['work_start_date'] ?? null,
-                'work_end_date' => $validated['work_end_date'] ?? null,
+                'hide_work_plan' => $hideWorkPlan,
+                'work_end_date' => $hideWorkPlan ? null : ($validated['work_end_date'] ?? null),
                 'estimated_hours' => $workTime['estimated_hours'],
                 'estimated_days' => $workTime['estimated_days'],
                 'hours_per_day' => $workTime['hours_per_day'],
@@ -368,7 +373,8 @@ class QuotationController extends Controller
 
     private function makeValidator(Request $request, ?Quotation $quotation = null)
     {
-        $validator = Validator::make($request->all(), [
+        $hideWorkPlan = $this->toBoolean($request->input('hide_work_plan', false));
+        $rules = [
             'number' => ['nullable', 'string', 'max:255', Rule::unique('quotations', 'number')->ignore($quotation?->id)],
             'status' => ['required', Rule::in($this->statusOptions()->keys()->all())],
             'issue_date' => ['required', 'date'],
@@ -383,11 +389,12 @@ class QuotationController extends Controller
             'client_phone' => ['nullable', 'string', 'max:50'],
             'client_address' => ['nullable', 'string', 'max:500'],
             'currency_id' => ['nullable', 'integer', 'exists:currencies,id'],
+            'hide_work_plan' => ['nullable', 'boolean'],
             'work_start_date' => ['nullable', 'date'],
-            'work_end_date' => ['nullable', 'date', 'after_or_equal:work_start_date'],
-            'estimated_hours' => ['nullable', 'integer', 'min:0'],
-            'estimated_days' => ['nullable', 'integer', 'min:0'],
-            'hours_per_day' => ['nullable', 'integer', 'min:0'],
+            'work_end_date' => $hideWorkPlan ? ['nullable'] : ['nullable', 'date', 'after_or_equal:work_start_date'],
+            'estimated_hours' => $hideWorkPlan ? ['nullable'] : ['nullable', 'integer', 'min:0'],
+            'estimated_days' => $hideWorkPlan ? ['nullable'] : ['nullable', 'integer', 'min:0'],
+            'hours_per_day' => $hideWorkPlan ? ['nullable'] : ['nullable', 'integer', 'min:0'],
             'tax_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'notes' => ['nullable', 'string', 'max:20000'],
             'terms_and_conditions' => ['nullable', 'string', 'max:20000'],
@@ -403,14 +410,21 @@ class QuotationController extends Controller
             'line_items.*.unit_price' => ['nullable', 'numeric', 'min:0'],
             'line_items.*.discount_amount' => ['nullable', 'numeric', 'min:0'],
             'work_sections' => ['nullable', 'array'],
-            'work_sections.*.title' => ['nullable', 'string', 'max:255'],
-            'work_sections.*.tasks' => ['nullable', 'array'],
-            'work_sections.*.tasks.*.name' => ['nullable', 'string', 'max:255'],
-            'work_sections.*.tasks.*.description' => ['nullable', 'string', 'max:5000'],
-            'work_sections.*.tasks.*.duration_days' => ['nullable', 'integer', 'min:0'],
-        ]);
+        ];
 
-        $validator->after(function ($validator) use ($request): void {
+        if (! $hideWorkPlan) {
+            $rules += [
+                'work_sections.*.title' => ['nullable', 'string', 'max:255'],
+                'work_sections.*.tasks' => ['nullable', 'array'],
+                'work_sections.*.tasks.*.name' => ['nullable', 'string', 'max:255'],
+                'work_sections.*.tasks.*.description' => ['nullable', 'string', 'max:5000'],
+                'work_sections.*.tasks.*.duration_days' => ['nullable', 'integer', 'min:0'],
+            ];
+        }
+
+        $validator = Validator::make($request->all(), $rules);
+
+        $validator->after(function ($validator) use ($request, $hideWorkPlan): void {
             $rawLineItems = collect($request->input('line_items', []));
             $hasPopulatedLine = false;
 
@@ -457,6 +471,10 @@ class QuotationController extends Controller
 
             if (! $hasPopulatedLine) {
                 $validator->errors()->add('line_items', 'Agrega al menos un item a la cotizacion.');
+            }
+
+            if ($hideWorkPlan) {
+                return;
             }
 
             foreach (collect($request->input('work_sections', [])) as $sectionIndex => $section) {
@@ -516,6 +534,7 @@ class QuotationController extends Controller
             'client_address' => '',
             'currency_id' => $settings->default_currency_id,
             'work_start_date' => '',
+            'hide_work_plan' => true,
             'work_end_date' => '',
             'estimated_hours' => '',
             'estimated_days' => '',
@@ -546,6 +565,7 @@ class QuotationController extends Controller
             'client_address' => $quotation->client_address,
             'currency_id' => $quotation->currency_id,
             'work_start_date' => $quotation->work_start_date?->toDateString(),
+            'hide_work_plan' => $quotation->hide_work_plan,
             'work_end_date' => $quotation->work_end_date?->toDateString(),
             'estimated_hours' => $quotation->estimated_hours,
             'estimated_days' => $quotation->estimated_days,

@@ -339,8 +339,11 @@ const initializeQuotationEditors = () => {
         );
 
         const customerSelect = form.querySelector('[data-customer-select]');
+        const hideWorkPlanToggle = form.querySelector('[data-hide-work-plan-toggle]');
         const lineItemList = form.querySelector('[data-line-item-list]');
         const workSectionList = form.querySelector('[data-work-section-list]');
+        const workPlanSection = form.querySelector('[data-work-plan-section]');
+        const workPlanFields = Array.from(form.querySelectorAll('[data-work-plan-fields]'));
         const lineItemTemplate = form.querySelector('[data-line-item-template]');
         const workSectionTemplate = form.querySelector('[data-work-section-template]');
         const workTaskTemplate = form.querySelector('[data-work-task-template]');
@@ -431,7 +434,33 @@ const initializeQuotationEditors = () => {
             target.querySelectorAll('[data-whole-number]').forEach(bindWholeNumberInput);
         };
 
+        const isWorkPlanHidden = () => hideWorkPlanToggle instanceof HTMLInputElement && hideWorkPlanToggle.checked;
+
+        const setControlsDisabled = (container, isDisabled) => {
+            container.querySelectorAll('input, select, textarea, button').forEach((control) => {
+                control.disabled = isDisabled;
+            });
+        };
+
+        const syncWorkPlanVisibility = () => {
+            const shouldHide = isWorkPlanHidden();
+
+            workPlanFields.forEach((field) => {
+                field.hidden = shouldHide;
+                setControlsDisabled(field, shouldHide);
+            });
+
+            if (workPlanSection) {
+                workPlanSection.hidden = shouldHide;
+                setControlsDisabled(workPlanSection, shouldHide);
+            }
+        };
+
         const syncWorkTime = () => {
+            if (isWorkPlanHidden()) {
+                return;
+            }
+
             const durationDays = Array.from(workSectionList.querySelectorAll('[data-task-duration]'))
                 .reduce((carry, input) => carry + Math.max(readInteger(input), 0), 0);
             const hoursPerDay = Math.max(readInteger(hoursPerDayInput), 0);
@@ -872,6 +901,10 @@ const initializeQuotationEditors = () => {
         customerSelect?.addEventListener('change', () => {
             applyCustomer(customerSelect.value);
         });
+        hideWorkPlanToggle?.addEventListener('change', () => {
+            syncWorkPlanVisibility();
+            syncWorkTime();
+        });
 
         form.querySelector('[data-add-line-item]')?.addEventListener('click', addLineItem);
         form.querySelector('[data-add-work-section]')?.addEventListener('click', addWorkSection);
@@ -882,6 +915,7 @@ const initializeQuotationEditors = () => {
             syncWorkTime();
         });
         form.addEventListener('submit', () => {
+            syncWorkPlanVisibility();
             bindWholeNumberInputs(form);
             form.querySelectorAll('[data-whole-number]').forEach(normalizeWholeNumberInput);
             syncWorkTime();
@@ -902,6 +936,7 @@ const initializeQuotationEditors = () => {
         });
 
         bindWholeNumberInputs(form);
+        syncWorkPlanVisibility();
         syncWorkTime();
         syncSummary();
     });

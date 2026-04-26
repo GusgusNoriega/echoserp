@@ -31,6 +31,7 @@
         $clientAddressValue = old('client_address', $quotation['client_address'] ?? '');
         $currencyValue = (int) old('currency_id', $quotation['currency_id'] ?? 0);
         $workStartValue = old('work_start_date', $quotation['work_start_date'] ?? '');
+        $hideWorkPlanValue = filter_var(old('hide_work_plan', $quotation['hide_work_plan'] ?? true), FILTER_VALIDATE_BOOLEAN);
         $workEndValue = old('work_end_date', $quotation['work_end_date'] ?? '');
         $estimatedHoursValue = old('estimated_hours', $quotation['estimated_hours'] ?? '');
         $estimatedDaysValue = old('estimated_days', $quotation['estimated_days'] ?? '');
@@ -346,6 +347,12 @@
                             <p class="section-kicker">Plan de trabajo</p>
                             <h3>Resumen de ejecucion</h3>
                         </div>
+
+                        <input type="hidden" name="hide_work_plan" value="0">
+                        <label class="toggle-field">
+                            <input type="checkbox" name="hide_work_plan" value="1" data-hide-work-plan-toggle @checked($hideWorkPlanValue)>
+                            <span>Desactivar plan de trabajo y tiempo estimado</span>
+                        </label>
                     </div>
 
                     <div class="form-grid form-grid--quote-head">
@@ -358,7 +365,7 @@
                             @endif
                         </label>
 
-                        <label class="form-field">
+                        <label class="form-field" data-work-plan-fields @if ($hideWorkPlanValue) hidden @endif>
                             <span>Entrega estimada</span>
                             <input type="date" name="work_end_date" value="{{ $workEndValue }}">
 
@@ -367,7 +374,7 @@
                             @endif
                         </label>
 
-                        <label class="form-field">
+                        <label class="form-field" data-work-plan-fields @if ($hideWorkPlanValue) hidden @endif>
                             <span>Horas estimadas</span>
                             <input type="number" name="estimated_hours" value="{{ $estimatedHoursValue }}" min="0" step="1" inputmode="numeric" placeholder="384" data-estimated-hours data-whole-number readonly>
 
@@ -376,7 +383,7 @@
                             @endif
                         </label>
 
-                        <label class="form-field">
+                        <label class="form-field" data-work-plan-fields @if ($hideWorkPlanValue) hidden @endif>
                             <span>Dias estimados</span>
                             <input type="number" name="estimated_days" value="{{ $estimatedDaysValue }}" min="0" step="1" inputmode="numeric" placeholder="48" data-estimated-days data-whole-number readonly>
 
@@ -387,7 +394,7 @@
                     </div>
 
                     <div class="form-grid form-grid--two">
-                        <label class="form-field">
+                        <label class="form-field" data-work-plan-fields @if ($hideWorkPlanValue) hidden @endif>
                             <span>Horas por dia</span>
                             <input type="number" name="hours_per_day" value="{{ $hoursPerDayValue }}" min="0" step="1" inputmode="numeric" placeholder="8" data-hours-per-day data-whole-number>
 
@@ -433,7 +440,7 @@
                     </div>
                 </article>
 
-                <article class="panel-card">
+                <article class="panel-card" data-work-plan-section @if ($hideWorkPlanValue) hidden @endif>
                     <div class="panel-heading">
                         <div>
                             <p class="section-kicker">Detalle operativo</p>
