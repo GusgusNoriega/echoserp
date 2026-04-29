@@ -4,7 +4,7 @@
     <section class="hero-grid">
         <article class="hero-card hero-card--compact">
             <p class="section-kicker">Documentos comerciales</p>
-            <h2>Construye cotizaciones completas con cliente, items, plan de trabajo y condiciones listos para PDF.</h2>
+            <h2>Construye cotizaciones completas con cliente, items, fechas del proyecto y condiciones listos para PDF.</h2>
             <p class="section-copy">
                 Este modulo separa la cotizacion real del catalogo de productos y servicios. Cada documento conserva
                 importes propios, datos manuales del cliente y un snapshot del emisor para historicos futuros.
@@ -25,7 +25,7 @@
             <div class="hero-pills">
                 <span class="pill">Cliente registrado o manual</span>
                 <span class="pill">Items autocompletables</span>
-                <span class="pill">Plan de trabajo</span>
+                <span class="pill">Fechas del proyecto</span>
                 <span class="pill">Terminos y notas</span>
             </div>
         </article>
@@ -144,8 +144,16 @@
                                 </td>
                                 <td>
                                     <div class="table-actions">
+                                        <a
+                                            class="button-link button-link--ghost button-link--compact"
+                                            href="{{ route('admin.quotations.pdf', ['quotation' => $quotation['id'], 'preview' => 1]) }}"
+                                            target="_blank"
+                                            rel="noopener"
+                                        >
+                                            Previsualizar
+                                        </a>
                                         <a class="button-link button-link--primary button-link--compact" href="{{ route('admin.quotations.pdf', $quotation['id']) }}">
-                                            Generar PDF
+                                            Descargar PDF
                                         </a>
                                         <a class="button-link button-link--ghost button-link--compact" href="{{ route('admin.quotations.edit', $quotation['id']) }}">
                                             Editar
@@ -213,7 +221,7 @@
         <x-admin.modal
             :id="'quotation-delete-modal-'.$quotation['id']"
             :title="'Eliminar cotizacion: '.$quotation['number']"
-            description="Esta accion quitara la cotizacion junto con sus items y plan de trabajo."
+            description="Esta accion quitara la cotizacion junto con sus items."
             kicker="Eliminacion"
         >
             <form class="modal-form" method="POST" action="{{ route('admin.quotations.destroy', $quotation['id']) }}">
@@ -223,8 +231,8 @@
                 <div class="danger-note">
                     <strong>Se eliminara el documento comercial.</strong>
                     <p>
-                        La cotizacion <strong>{{ $quotation['number'] }}</strong> dejara de existir junto con sus items,
-                        terminos y estructura de trabajo asociada.
+                        La cotizacion <strong>{{ $quotation['number'] }}</strong> dejara de existir junto con sus items
+                        y terminos asociados.
                     </p>
                 </div>
 

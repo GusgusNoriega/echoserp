@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 #[Fillable([
     'type',
+    'item_structure',
     'name',
     'description',
     'unit_label',
@@ -40,5 +41,10 @@ class QuotationItem extends Model
     public function quotationLineItems(): HasMany
     {
         return $this->hasMany(QuotationLineItem::class);
+    }
+
+    public function subItems(): HasMany
+    {
+        return $this->hasMany(QuotationItemSubItem::class)->orderBy('sort_order');
     }
 }

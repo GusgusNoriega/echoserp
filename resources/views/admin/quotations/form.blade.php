@@ -2,20 +2,6 @@
 
 @section('content')
     @php
-        $integerValue = static function (mixed $value): string {
-            if ($value === null || $value === '') {
-                return '';
-            }
-
-            $number = (float) $value;
-
-            if (! is_finite($number)) {
-                return '';
-            }
-
-            return (string) max((int) round($number), 0);
-        };
-
         $numberValue = old('number', $quotation['number'] ?? '');
         $statusValue = old('status', $quotation['status'] ?? 'draft');
         $issueDateValue = old('issue_date', $quotation['issue_date'] ?? now()->toDateString());
@@ -30,23 +16,38 @@
         $clientPhoneValue = old('client_phone', $quotation['client_phone'] ?? '');
         $clientAddressValue = old('client_address', $quotation['client_address'] ?? '');
         $currencyValue = (int) old('currency_id', $quotation['currency_id'] ?? 0);
+        $salesAdvisorValue = (int) old('sales_advisor_id', $quotation['sales_advisor_id'] ?? 0);
         $workStartValue = old('work_start_date', $quotation['work_start_date'] ?? '');
-        $hideWorkPlanValue = filter_var(old('hide_work_plan', $quotation['hide_work_plan'] ?? true), FILTER_VALIDATE_BOOLEAN);
         $workEndValue = old('work_end_date', $quotation['work_end_date'] ?? '');
-        $estimatedHoursValue = old('estimated_hours', $quotation['estimated_hours'] ?? '');
-        $estimatedDaysValue = old('estimated_days', $quotation['estimated_days'] ?? '');
-        $hoursPerDayValue = old('hours_per_day', $quotation['hours_per_day'] ?? '8');
+        $isEventValue = filter_var(old('is_event', $quotation['is_event'] ?? false), FILTER_VALIDATE_BOOLEAN);
+        $eventDateValues = old('event_dates', $quotation['event_dates'] ?? ['']);
+        $eventSetupValue = old('event_setup', $quotation['event_setup'] ?? '');
+        $eventTeardownValue = old('event_teardown', $quotation['event_teardown'] ?? '');
+        $eventLocationValue = old('event_location', $quotation['event_location'] ?? '');
         $taxRateValue = old('tax_rate', $quotation['tax_rate'] ?? '0.00');
         $notesValue = old('notes', $quotation['notes'] ?? '');
         $termsValue = old('terms_and_conditions', $quotation['terms_and_conditions'] ?? '');
 
         $lineItems = old('line_items', $quotation['line_items'] ?? []);
-        $workSections = old('work_sections', $quotation['work_sections'] ?? []);
+
+        if (! is_array($eventDateValues)) {
+            $eventDateValues = [$eventDateValues];
+        }
+
+        $eventDateValues = collect($eventDateValues)
+            ->map(static fn (mixed $date): string => trim((string) $date))
+            ->values()
+            ->all();
+
+        if ($eventDateValues === []) {
+            $eventDateValues = [''];
+        }
 
         if (! is_array($lineItems) || $lineItems === []) {
             $lineItems = [[
                 'quotation_item_id' => '',
                 'catalog_lookup' => '',
+                'is_multiple' => false,
                 'name' => '',
                 'description' => '',
                 'specifications_text' => '',
@@ -58,30 +59,18 @@
                 'unit_label' => '',
                 'unit_price' => '',
                 'discount_amount' => '0.00',
+                'sub_items' => [],
             ]];
         }
 
-        if (! is_array($workSections) || $workSections === []) {
-            $workSections = [[
-                'title' => '',
-                'tasks' => [[
-                    'name' => '',
-                    'description' => '',
-                    'duration_days' => '',
-                ]],
-            ]];
-        }
+        $summarySubtotal = collect($lineItems)->sum(static function (array $item): float {
+            $subItemsTotal = collect($item['sub_items'] ?? [])->sum(static fn (mixed $subItem): float => is_array($subItem) ? (float) ($subItem['price'] ?? 0) : 0);
+            $unitPrice = filter_var($item['is_multiple'] ?? false, FILTER_VALIDATE_BOOLEAN) && $subItemsTotal > 0
+                ? $subItemsTotal
+                : (float) ($item['unit_price'] ?? 0);
 
-        $workDurationDays = collect($workSections)
-            ->flatMap(static fn (mixed $section): array => is_array($section) && is_array($section['tasks'] ?? null) ? $section['tasks'] : [])
-            ->sum(static fn (mixed $task): int => is_array($task) ? max((int) round((float) ($task['duration_days'] ?? 0)), 0) : 0);
-        $hoursPerDayValue = $integerValue($hoursPerDayValue);
-        $estimatedDaysValue = $workDurationDays > 0 ? (string) $workDurationDays : $integerValue($estimatedDaysValue);
-        $estimatedHoursValue = $estimatedDaysValue !== '' && $hoursPerDayValue !== ''
-            ? (string) ((int) $estimatedDaysValue * (int) $hoursPerDayValue)
-            : $integerValue($estimatedHoursValue);
-
-        $summarySubtotal = collect($lineItems)->sum(static fn (array $item): float => ((float) ($item['quantity'] ?? 0)) * ((float) ($item['unit_price'] ?? 0)));
+            return ((float) ($item['quantity'] ?? 0)) * $unitPrice;
+        });
         $summaryDiscount = collect($lineItems)->sum(static fn (array $item): float => (float) ($item['discount_amount'] ?? 0));
         $summaryBase = max($summarySubtotal - $summaryDiscount, 0);
         $summaryTax = round($summaryBase * (((float) $taxRateValue) / 100), 2);
@@ -113,7 +102,8 @@
                 <span class="pill">Numeracion</span>
                 <span class="pill">Resumen del proyecto</span>
                 <span class="pill">Items valorizados</span>
-                <span class="pill">Plan de trabajo</span>
+                <span class="pill">Fechas del proyecto</span>
+                <span class="pill">Datos de evento</span>
             </div>
         </article>
 
@@ -248,6 +238,24 @@
                         </label>
                     </div>
 
+                    <div class="form-grid form-grid--two">
+                        <label class="form-field">
+                            <span>Asesor de ventas</span>
+                            <select name="sales_advisor_id">
+                                <option value="">Sin asesor asignado</option>
+                                @foreach ($userOptions as $user)
+                                    <option value="{{ $user['id'] }}" @selected($salesAdvisorValue === (int) $user['id'])>
+                                        {{ $user['label'] }}
+                                    </option>
+                                @endforeach
+                            </select>
+
+                            @if ($errors->has('sales_advisor_id'))
+                                <small class="field-error">{{ $errors->first('sales_advisor_id') }}</small>
+                            @endif
+                        </label>
+                    </div>
+
                     <label class="form-field">
                         <span>Resumen o descripcion general</span>
                         <textarea name="summary" rows="5" placeholder="Describe el alcance general de la cotizacion">{{ $summaryValue }}</textarea>
@@ -339,25 +347,92 @@
                             @endif
                         </label>
                     </div>
+
+                    <input type="hidden" name="is_event" value="0">
+                    <label class="toggle-field">
+                        <input type="checkbox" name="is_event" value="1" data-event-toggle @checked($isEventValue)>
+                        <span>Esta cotizacion es para un evento</span>
+                    </label>
+
+                    <div data-event-fields @if (! $isEventValue) hidden @endif>
+                        <div class="form-grid form-grid--two">
+                            <div class="form-field">
+                                <span>Fecha de evento</span>
+                                <div class="quote-date-list" data-event-date-list data-next-event-date-index="{{ count($eventDateValues) }}">
+                                    @foreach ($eventDateValues as $eventDateIndex => $eventDateValue)
+                                        <div class="form-grid form-grid--two" data-event-date-row>
+                                            <label class="form-field">
+                                                <span data-event-date-label>Fecha {{ $eventDateIndex + 1 }}</span>
+                                                <input type="date" name="event_dates[{{ $eventDateIndex }}]" value="{{ $eventDateValue }}">
+
+                                                @if ($errors->has("event_dates.$eventDateIndex"))
+                                                    <small class="field-error">{{ $errors->first("event_dates.$eventDateIndex") }}</small>
+                                                @endif
+                                            </label>
+
+                                            <div class="quote-task-card__actions">
+                                                <button class="button-link button-link--ghost button-link--compact" type="button" data-remove-event-date>
+                                                    Quitar fecha
+                                                </button>
+                                            </div>
+                                        </div>
+                                    @endforeach
+                                </div>
+
+                                <div class="hero-actions">
+                                    <button class="button-link button-link--ghost button-link--compact" type="button" data-add-event-date>
+                                        Agregar fecha
+                                    </button>
+                                </div>
+
+                                @if ($errors->has('event_dates'))
+                                    <small class="field-error">{{ $errors->first('event_dates') }}</small>
+                                @endif
+                            </div>
+
+                            <label class="form-field">
+                                <span>Lugar</span>
+                                <input type="text" name="event_location" value="{{ $eventLocationValue }}" placeholder="San Martin Porres">
+
+                                @if ($errors->has('event_location'))
+                                    <small class="field-error">{{ $errors->first('event_location') }}</small>
+                                @endif
+                            </label>
+                        </div>
+
+                        <div class="form-grid form-grid--two">
+                            <label class="form-field">
+                                <span>Montaje</span>
+                                <input type="date" name="event_setup" value="{{ $eventSetupValue }}">
+
+                                @if ($errors->has('event_setup'))
+                                    <small class="field-error">{{ $errors->first('event_setup') }}</small>
+                                @endif
+                            </label>
+
+                            <label class="form-field">
+                                <span>Desmontaje</span>
+                                <input type="date" name="event_teardown" value="{{ $eventTeardownValue }}">
+
+                                @if ($errors->has('event_teardown'))
+                                    <small class="field-error">{{ $errors->first('event_teardown') }}</small>
+                                @endif
+                            </label>
+                        </div>
+                    </div>
                 </article>
 
                 <article class="panel-card">
                     <div class="panel-heading">
                         <div>
-                            <p class="section-kicker">Plan de trabajo</p>
-                            <h3>Resumen de ejecucion</h3>
+                            <p class="section-kicker">Fechas del proyecto</p>
+                            <h3>Cronograma general</h3>
                         </div>
-
-                        <input type="hidden" name="hide_work_plan" value="0">
-                        <label class="toggle-field">
-                            <input type="checkbox" name="hide_work_plan" value="1" data-hide-work-plan-toggle @checked($hideWorkPlanValue)>
-                            <span>Desactivar plan de trabajo y tiempo estimado</span>
-                        </label>
                     </div>
 
-                    <div class="form-grid form-grid--quote-head">
+                    <div class="form-grid form-grid--two">
                         <label class="form-field">
-                            <span>Inicio estimado</span>
+                            <span>Fecha de inicio</span>
                             <input type="date" name="work_start_date" value="{{ $workStartValue }}">
 
                             @if ($errors->has('work_start_date'))
@@ -365,50 +440,12 @@
                             @endif
                         </label>
 
-                        <label class="form-field" data-work-plan-fields @if ($hideWorkPlanValue) hidden @endif>
-                            <span>Entrega estimada</span>
+                        <label class="form-field">
+                            <span>Fecha de finalizacion (opcional)</span>
                             <input type="date" name="work_end_date" value="{{ $workEndValue }}">
 
                             @if ($errors->has('work_end_date'))
                                 <small class="field-error">{{ $errors->first('work_end_date') }}</small>
-                            @endif
-                        </label>
-
-                        <label class="form-field" data-work-plan-fields @if ($hideWorkPlanValue) hidden @endif>
-                            <span>Horas estimadas</span>
-                            <input type="number" name="estimated_hours" value="{{ $estimatedHoursValue }}" min="0" step="1" inputmode="numeric" placeholder="384" data-estimated-hours data-whole-number readonly>
-
-                            @if ($errors->has('estimated_hours'))
-                                <small class="field-error">{{ $errors->first('estimated_hours') }}</small>
-                            @endif
-                        </label>
-
-                        <label class="form-field" data-work-plan-fields @if ($hideWorkPlanValue) hidden @endif>
-                            <span>Dias estimados</span>
-                            <input type="number" name="estimated_days" value="{{ $estimatedDaysValue }}" min="0" step="1" inputmode="numeric" placeholder="48" data-estimated-days data-whole-number readonly>
-
-                            @if ($errors->has('estimated_days'))
-                                <small class="field-error">{{ $errors->first('estimated_days') }}</small>
-                            @endif
-                        </label>
-                    </div>
-
-                    <div class="form-grid form-grid--two">
-                        <label class="form-field" data-work-plan-fields @if ($hideWorkPlanValue) hidden @endif>
-                            <span>Horas por dia</span>
-                            <input type="number" name="hours_per_day" value="{{ $hoursPerDayValue }}" min="0" step="1" inputmode="numeric" placeholder="8" data-hours-per-day data-whole-number>
-
-                            @if ($errors->has('hours_per_day'))
-                                <small class="field-error">{{ $errors->first('hours_per_day') }}</small>
-                            @endif
-                        </label>
-
-                        <label class="form-field">
-                            <span>Tasa de impuesto (%)</span>
-                            <input type="number" name="tax_rate" value="{{ $taxRateValue }}" min="0" max="100" step="0.01" placeholder="0.00" data-tax-rate>
-
-                            @if ($errors->has('tax_rate'))
-                                <small class="field-error">{{ $errors->first('tax_rate') }}</small>
                             @endif
                         </label>
                     </div>
@@ -426,6 +463,17 @@
                         </button>
                     </div>
 
+                    <div class="form-grid form-grid--two">
+                        <label class="form-field">
+                            <span>Tasa de impuesto (%)</span>
+                            <input type="number" name="tax_rate" value="{{ $taxRateValue }}" min="0" max="100" step="0.01" placeholder="0.00" data-tax-rate>
+
+                            @if ($errors->has('tax_rate'))
+                                <small class="field-error">{{ $errors->first('tax_rate') }}</small>
+                            @endif
+                        </label>
+                    </div>
+
                     @if ($errors->has('line_items'))
                         <p class="field-error">{{ $errors->first('line_items') }}</p>
                     @endif
@@ -435,28 +483,6 @@
                             @include('admin.quotations.partials.quotation-line-item', [
                                 'index' => $index,
                                 'lineItem' => $lineItem,
-                            ])
-                        @endforeach
-                    </div>
-                </article>
-
-                <article class="panel-card" data-work-plan-section @if ($hideWorkPlanValue) hidden @endif>
-                    <div class="panel-heading">
-                        <div>
-                            <p class="section-kicker">Detalle operativo</p>
-                            <h3>Bloques y tareas del plan de trabajo</h3>
-                        </div>
-
-                        <button class="button-link button-link--ghost button-link--compact" type="button" data-add-work-section>
-                            Agregar bloque
-                        </button>
-                    </div>
-
-                    <div class="quote-section-list" data-work-section-list data-next-section-index="{{ count($workSections) }}">
-                        @foreach ($workSections as $sectionIndex => $section)
-                            @include('admin.quotations.partials.quotation-work-section', [
-                                'sectionIndex' => $sectionIndex,
-                                'section' => $section,
                             ])
                         @endforeach
                     </div>
@@ -542,7 +568,6 @@
                         <li>Si eliges un item del catalogo, se completan nombre, descripcion, unidad, precio e imagen.</li>
                         <li>Puedes editar cualquier campo autocompletado antes de guardar.</li>
                         <li>Cada linea puede mantener la imagen del catalogo o reemplazarse con una imagen solo para esa cotizacion.</li>
-                        <li>Los bloques del plan de trabajo sirven para reflejar la estructura tipo PDF del ejemplo.</li>
                     </ul>
                 </article>
             </aside>
@@ -560,6 +585,7 @@
                 'lineItem' => [
                 'quotation_item_id' => '',
                 'catalog_lookup' => '',
+                'is_multiple' => false,
                 'name' => '',
                 'description' => '',
                 'specifications_text' => '',
@@ -571,36 +597,24 @@
                 'unit_label' => '',
                 'unit_price' => '',
                 'discount_amount' => '0.00',
+                'sub_items' => [],
                 ],
             ])
         </template>
 
-        <template data-work-section-template>
-            @include('admin.quotations.partials.quotation-work-section', [
-                'sectionIndex' => '__SECTION_INDEX__',
-                'section' => [
-                    'title' => '',
-                    'tasks' => [
-                        [
-                            'name' => '',
-                            'description' => '',
-                            'duration_days' => '',
-                        ],
-                    ],
-                ],
-            ])
-        </template>
+        <template data-event-date-template>
+            <div class="form-grid form-grid--two" data-event-date-row>
+                <label class="form-field">
+                    <span data-event-date-label>Fecha __EVENT_DATE_NUMBER__</span>
+                    <input type="date" name="event_dates[__EVENT_DATE_INDEX__]" value="">
+                </label>
 
-        <template data-work-task-template>
-            @include('admin.quotations.partials.quotation-work-task', [
-                'sectionIndex' => '__SECTION_INDEX__',
-                'taskIndex' => '__TASK_INDEX__',
-                'task' => [
-                    'name' => '',
-                    'description' => '',
-                    'duration_days' => '',
-                ],
-            ])
+                <div class="quote-task-card__actions">
+                    <button class="button-link button-link--ghost button-link--compact" type="button" data-remove-event-date>
+                        Quitar fecha
+                    </button>
+                </div>
+            </div>
         </template>
     </form>
 @endsection

@@ -17,8 +17,9 @@ class QuotationPdfGenerator
     {
         $quotation->loadMissing([
             'currency',
-            'lineItems.catalogItem',
-            'workSections.tasks',
+            'lineItems.subItems',
+            'lineItems.catalogItem.subItems',
+            'salesAdvisor',
         ]);
 
         $issuer = $this->issuer($quotation);
@@ -31,7 +32,6 @@ class QuotationPdfGenerator
             'lineItems' => $this->lineItems($quotation),
             'logoUri' => $this->logoUri($issuer),
             'quotation' => $quotation,
-            'statusLabel' => $this->statusLabel($quotation->status),
         ])->render();
 
         $mpdf = new Mpdf([
@@ -97,7 +97,7 @@ class QuotationPdfGenerator
             'name' => $lineItem->name,
             'quantity' => (float) $lineItem->quantity,
             'quantity_label' => number_format((float) $lineItem->quantity, 2, ',', '.'),
-            'specifications' => $this->specifications($lineItem),
+            'specifications' => $this->specifications($lineItem, $quotation),
             'type_label' => $this->typeLabel($lineItem),
             'unit_label' => $lineItem->unit_label ?: 'Unidad',
             'unit_price' => (float) $lineItem->unit_price,
@@ -105,13 +105,27 @@ class QuotationPdfGenerator
         ]);
     }
 
-    private function specifications(QuotationLineItem $lineItem): Collection
+    private function specifications(QuotationLineItem $lineItem, Quotation $quotation): Collection
     {
         $specifications = $lineItem->specifications ?: $lineItem->catalogItem?->specifications ?: [];
+        $subItems = $lineItem->subItems->isNotEmpty()
+            ? $lineItem->subItems
+            : ($lineItem->specifications ? collect() : ($lineItem->catalogItem?->subItems ?? collect()));
 
         return collect($specifications)
             ->map(static fn (mixed $specification): string => trim((string) $specification))
             ->filter()
+            ->merge($subItems->map(function ($subItem) use ($quotation): string {
+                $details = collect([
+                    $subItem->description,
+                    $subItem->unit_label ? 'Unidad: '.$subItem->unit_label : null,
+                    filled($subItem->price)
+                        ? 'Precio: '.$this->formatMoney((float) $subItem->price, $quotation)
+                        : null,
+                ])->filter()->implode(' | ');
+
+                return trim($subItem->name.($details !== '' ? ' - '.$details : ''));
+            }))
             ->values();
     }
 
@@ -131,16 +145,6 @@ class QuotationPdfGenerator
             number_format($amount, 2, ',', '.'),
             $quotation->currency?->code,
         ])->filter()->implode(' ');
-    }
-
-    private function statusLabel(?string $status): string
-    {
-        return match ($status) {
-            'approved' => 'Aprobada',
-            'cancelled' => 'Cancelada',
-            'sent' => 'Enviada',
-            default => 'Borrador',
-        };
     }
 
     private function logoUri(array $issuer): ?string

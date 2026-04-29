@@ -14,7 +14,21 @@
         return (string) max((int) round($number), 0);
     };
     $quantityValue = $integerValue($lineItem['quantity'] ?? '1');
+    $isMultipleValue = filter_var($lineItem['is_multiple'] ?? false, FILTER_VALIDATE_BOOLEAN);
+    $subItems = $lineItem['sub_items'] ?? [];
+
+    if (! is_array($subItems) || $subItems === []) {
+        $subItems = [[
+            'name' => '',
+            'description' => '',
+            'unit_label' => '',
+            'price' => '',
+        ]];
+    }
+
+    $subItemsTotal = collect($subItems)->sum(static fn (mixed $subItem): float => is_array($subItem) ? (float) ($subItem['price'] ?? 0) : 0);
     $unitPriceValue = $lineItem['unit_price'] ?? '';
+    $unitPriceValue = $isMultipleValue && $subItemsTotal > 0 ? number_format($subItemsTotal, 2, '.', '') : $unitPriceValue;
     $discountValue = $lineItem['discount_amount'] ?? '0.00';
     $lineTotal = max(((float) $quantityValue * (float) ($unitPriceValue ?: 0)) - (float) ($discountValue ?: 0), 0);
     $imagePath = $lineItem['image_path'] ?? '';
@@ -81,6 +95,115 @@
         @endif
     </label>
 
+    <input type="hidden" name="line_items[{{ $index }}][is_multiple]" value="0">
+    <label class="toggle-field">
+        <input type="checkbox" name="line_items[{{ $index }}][is_multiple]" value="1" data-line-multiple-toggle @checked($isMultipleValue)>
+        <span>Este producto o servicio tiene subitems</span>
+    </label>
+
+    <div data-line-subitems @if (! $isMultipleValue) hidden @endif>
+        <div class="panel-heading">
+            <div>
+                <p class="section-kicker">Subitems</p>
+                <h4>Componentes incluidos en esta linea</h4>
+            </div>
+
+            <button class="button-link button-link--ghost button-link--compact" type="button" data-add-line-subitem>
+                Agregar subitem
+            </button>
+        </div>
+
+        @if ($errors->has("line_items.$index.sub_items"))
+            <small class="field-error">{{ $errors->first("line_items.$index.sub_items") }}</small>
+        @endif
+
+        <div class="quote-section-list" data-line-subitem-list data-next-line-subitem-index="{{ count($subItems) }}">
+            @foreach ($subItems as $subItemIndex => $subItem)
+                <article class="quote-task-card" data-line-subitem-row>
+                    <div class="form-grid form-grid--quote-line">
+                        <label class="form-field">
+                            <span data-line-subitem-label>Subitem {{ $subItemIndex + 1 }}</span>
+                            <input type="text" name="line_items[{{ $index }}][sub_items][{{ $subItemIndex }}][name]" value="{{ $subItem['name'] ?? '' }}" placeholder="Nombre del subitem" data-line-subitem-name>
+
+                            @if ($errors->has("line_items.$index.sub_items.$subItemIndex.name"))
+                                <small class="field-error">{{ $errors->first("line_items.$index.sub_items.$subItemIndex.name") }}</small>
+                            @endif
+                        </label>
+
+                        <label class="form-field">
+                            <span>Precio</span>
+                            <input type="number" name="line_items[{{ $index }}][sub_items][{{ $subItemIndex }}][price]" value="{{ $subItem['price'] ?? '' }}" min="0" step="0.01" placeholder="0.00" data-line-subitem-price>
+
+                            @if ($errors->has("line_items.$index.sub_items.$subItemIndex.price"))
+                                <small class="field-error">{{ $errors->first("line_items.$index.sub_items.$subItemIndex.price") }}</small>
+                            @endif
+                        </label>
+                    </div>
+
+                    <div class="form-grid form-grid--two">
+                        <label class="form-field">
+                            <span>Unidad</span>
+                            <input type="text" name="line_items[{{ $index }}][sub_items][{{ $subItemIndex }}][unit_label]" value="{{ $subItem['unit_label'] ?? '' }}" placeholder="unidad, hora, fase..." data-line-subitem-unit>
+
+                            @if ($errors->has("line_items.$index.sub_items.$subItemIndex.unit_label"))
+                                <small class="field-error">{{ $errors->first("line_items.$index.sub_items.$subItemIndex.unit_label") }}</small>
+                            @endif
+                        </label>
+
+                        <div class="quote-task-card__actions">
+                            <button class="button-link button-link--ghost button-link--compact" type="button" data-remove-line-subitem>
+                                Quitar subitem
+                            </button>
+                        </div>
+                    </div>
+
+                    <label class="form-field">
+                        <span>Descripcion</span>
+                        <textarea name="line_items[{{ $index }}][sub_items][{{ $subItemIndex }}][description]" rows="2" placeholder="Detalle opcional del subitem" data-line-subitem-description>{{ $subItem['description'] ?? '' }}</textarea>
+
+                        @if ($errors->has("line_items.$index.sub_items.$subItemIndex.description"))
+                            <small class="field-error">{{ $errors->first("line_items.$index.sub_items.$subItemIndex.description") }}</small>
+                        @endif
+                    </label>
+                </article>
+            @endforeach
+        </div>
+
+        <template data-line-subitem-template>
+            <article class="quote-task-card" data-line-subitem-row>
+                <div class="form-grid form-grid--quote-line">
+                    <label class="form-field">
+                        <span data-line-subitem-label>Subitem __LINE_SUBITEM_NUMBER__</span>
+                        <input type="text" name="line_items[{{ $index }}][sub_items][__LINE_SUBITEM_INDEX__][name]" value="" placeholder="Nombre del subitem" data-line-subitem-name>
+                    </label>
+
+                    <label class="form-field">
+                        <span>Precio</span>
+                        <input type="number" name="line_items[{{ $index }}][sub_items][__LINE_SUBITEM_INDEX__][price]" value="" min="0" step="0.01" placeholder="0.00" data-line-subitem-price>
+                    </label>
+                </div>
+
+                <div class="form-grid form-grid--two">
+                    <label class="form-field">
+                        <span>Unidad</span>
+                        <input type="text" name="line_items[{{ $index }}][sub_items][__LINE_SUBITEM_INDEX__][unit_label]" value="" placeholder="unidad, hora, fase..." data-line-subitem-unit>
+                    </label>
+
+                    <div class="quote-task-card__actions">
+                        <button class="button-link button-link--ghost button-link--compact" type="button" data-remove-line-subitem>
+                            Quitar subitem
+                        </button>
+                    </div>
+                </div>
+
+                <label class="form-field">
+                    <span>Descripcion</span>
+                    <textarea name="line_items[{{ $index }}][sub_items][__LINE_SUBITEM_INDEX__][description]" rows="2" placeholder="Detalle opcional del subitem" data-line-subitem-description></textarea>
+                </label>
+            </article>
+        </template>
+    </div>
+
     <div class="form-grid form-grid--quote-line-media">
         <label class="form-field">
             <span>Imagen del item</span>
@@ -135,7 +258,10 @@
 
         <label class="form-field">
             <span>P. unitario</span>
-            <input type="number" name="line_items[{{ $index }}][unit_price]" value="{{ $unitPriceValue }}" min="0" step="0.01" placeholder="0.00" data-line-unit-price>
+            <input type="number" name="line_items[{{ $index }}][unit_price]" value="{{ $unitPriceValue }}" min="0" step="0.01" placeholder="0.00" data-line-unit-price @readonly($isMultipleValue)>
+            <small class="form-help" data-line-price-help>
+                {{ $isMultipleValue ? 'Se calcula automaticamente con la suma de los subitems.' : 'Precio unitario de la linea.' }}
+            </small>
 
             @if ($errors->has("line_items.$index.unit_price"))
                 <small class="field-error">{{ $errors->first("line_items.$index.unit_price") }}</small>

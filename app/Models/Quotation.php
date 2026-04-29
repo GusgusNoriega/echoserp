@@ -23,9 +23,15 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
     'client_phone',
     'client_address',
     'currency_id',
+    'sales_advisor_id',
     'work_start_date',
     'hide_work_plan',
     'work_end_date',
+    'is_event',
+    'event_dates',
+    'event_setup',
+    'event_teardown',
+    'event_location',
     'estimated_hours',
     'estimated_days',
     'hours_per_day',
@@ -48,9 +54,14 @@ class Quotation extends Model
         return [
             'issue_date' => 'date',
             'valid_until' => 'date',
+            'sales_advisor_id' => 'integer',
             'work_start_date' => 'date',
             'hide_work_plan' => 'boolean',
             'work_end_date' => 'date',
+            'is_event' => 'boolean',
+            'event_dates' => 'array',
+            'event_setup' => 'date',
+            'event_teardown' => 'date',
             'estimated_hours' => 'decimal:2',
             'estimated_days' => 'decimal:2',
             'hours_per_day' => 'decimal:2',
@@ -71,6 +82,11 @@ class Quotation extends Model
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class);
+    }
+
+    public function salesAdvisor(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'sales_advisor_id');
     }
 
     public function createdBy(): BelongsTo

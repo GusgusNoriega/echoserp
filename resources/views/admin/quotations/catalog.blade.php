@@ -30,6 +30,7 @@
                 <span class="pill">Imagen comercial</span>
                 <span class="pill">Unidad sugerida</span>
                 <span class="pill">Especificaciones por linea</span>
+                <span class="pill">Items multiples</span>
                 <span class="pill">Catalogo reutilizable</span>
             </div>
         </article>
@@ -92,6 +93,7 @@
                         <div class="quotation-card__title">
                             <div class="chip-list">
                                 <span class="chip chip--accent">{{ $item['type_label'] }}</span>
+                                <span class="chip">{{ $item['item_structure_label'] }}</span>
                                 <span class="chip">{{ $item['status_label'] }}</span>
                             </div>
 
@@ -128,6 +130,10 @@
                             <strong>{{ $item['specifications_count'] }}</strong>
                             <span>Especificaciones</span>
                         </div>
+                        <div>
+                            <strong>{{ $item['sub_items_count'] }}</strong>
+                            <span>Subitems</span>
+                        </div>
                     </div>
 
                     <div class="quotation-card__section">
@@ -139,6 +145,33 @@
                         <strong>Moneda</strong>
                         <p>{{ $item['currency_label'] ?? 'Sin moneda asignada' }}</p>
                     </div>
+
+                    @if ($item['item_structure'] === 'multiple')
+                        <div class="quotation-card__section">
+                            <strong>Subitems del paquete</strong>
+
+                            @if ($item['sub_items'])
+                                <ul class="spec-list">
+                                    @foreach ($item['sub_items'] as $subItem)
+                                        <li>
+                                            {{ $subItem['name'] }}
+                                            @if ($subItem['unit_label'])
+                                                - {{ $subItem['unit_label'] }}
+                                            @endif
+                                            @if ($subItem['price_label'])
+                                                - {{ $subItem['price_label'] }}
+                                            @endif
+                                            @if ($subItem['description'])
+                                                - {{ $subItem['description'] }}
+                                            @endif
+                                        </li>
+                                    @endforeach
+                                </ul>
+                            @else
+                                <p>Este item multiple aun no tiene subitems registrados.</p>
+                            @endif
+                        </div>
+                    @endif
 
                     <div class="quotation-card__section">
                         <strong>Especificaciones</strong>

@@ -202,6 +202,7 @@ class QuotationModuleTest extends TestCase
 
         $this->post('/admin/cotizaciones/catalogo/items', [
             'type' => 'product',
+            'item_structure' => 'single',
             'name' => 'Terminal portatil',
             'description' => 'Equipo de captura para operacion en campo.',
             'unit_label' => 'unidad',
@@ -225,6 +226,7 @@ class QuotationModuleTest extends TestCase
 
         $this->put('/admin/cotizaciones/catalogo/items/'.$item->id, [
             'type' => 'service',
+            'item_structure' => 'single',
             'name' => 'Terminal portatil avanzada',
             'description' => 'Servicio con suministro y configuracion.',
             'unit_label' => 'servicio',
@@ -268,6 +270,7 @@ class QuotationModuleTest extends TestCase
 
         $this->post('/admin/cotizaciones/catalogo/items', [
             'type' => 'product',
+            'item_structure' => 'single',
             'name' => 'Stand para feria',
             'description' => 'Stand modular para eventos comerciales.',
             'unit_label' => 'unidad',
@@ -283,6 +286,7 @@ class QuotationModuleTest extends TestCase
 
         $this->put('/admin/cotizaciones/catalogo/items/'.$item->id, [
             'type' => 'product',
+            'item_structure' => 'single',
             'name' => 'Stand para feria actualizado',
             'description' => 'Stand modular para eventos comerciales actualizado.',
             'unit_label' => 'unidad',
@@ -299,6 +303,61 @@ class QuotationModuleTest extends TestCase
         $this->get('/admin/cotizaciones/catalogo')
             ->assertOk()
             ->assertSee('S/ 200,00 PEN');
+    }
+
+    public function test_catalog_item_can_be_multiple_and_calculates_price_from_subitems(): void
+    {
+        $this->seed();
+        $this->signInAsAdmin();
+
+        $currency = Currency::query()->create([
+            'name' => 'Sol peruano',
+            'code' => 'PEN',
+            'symbol' => 'S/',
+            'is_active' => true,
+        ]);
+
+        $this->post('/admin/cotizaciones/catalogo/items', [
+            'type' => 'service',
+            'item_structure' => 'multiple',
+            'name' => 'Produccion de evento',
+            'description' => 'Servicio integral para eventos corporativos.',
+            'unit_label' => 'evento',
+            'specifications_text' => "Coordinacion general\nSoporte operativo",
+            'currency_id' => $currency->id,
+            'is_active' => '1',
+            'sub_items' => [
+                [
+                    'name' => 'Pantalla LED',
+                    'description' => 'Pantalla principal de escenario.',
+                    'unit_label' => 'unidad',
+                    'price' => '1200.50',
+                ],
+                [
+                    'name' => 'Sonido profesional',
+                    'description' => 'Equipo PA y microfonia.',
+                    'unit_label' => 'servicio',
+                    'price' => '800',
+                ],
+            ],
+        ])->assertRedirect('/admin/cotizaciones/catalogo');
+
+        $item = QuotationItem::query()
+            ->where('name', 'Produccion de evento')
+            ->with('subItems')
+            ->firstOrFail();
+
+        $this->assertSame('multiple', $item->item_structure);
+        $this->assertSame('2000.50', (string) $item->price);
+        $this->assertCount(2, $item->subItems);
+        $this->assertSame('Pantalla LED', $item->subItems[0]->name);
+        $this->assertSame('1200.50', (string) $item->subItems[0]->price);
+
+        $this->get('/admin/cotizaciones/catalogo')
+            ->assertOk()
+            ->assertSee('Multiple')
+            ->assertSee('Pantalla LED')
+            ->assertSee('S/ 2.000,50 PEN');
     }
 
     public function test_customer_records_can_be_created_updated_and_deleted(): void
@@ -410,7 +469,6 @@ class QuotationModuleTest extends TestCase
                     'discount_amount' => '0.00',
                 ],
             ],
-            'work_sections' => [],
         ];
 
         $this->post('/admin/cotizaciones', array_merge($basePayload, [
@@ -436,7 +494,7 @@ class QuotationModuleTest extends TestCase
         $this->assertSame('Cliente Manual SAS', $manualQuotation->client_company_name);
     }
 
-    public function test_quotation_can_be_created_with_catalog_items_manual_items_and_work_plan(): void
+    public function test_quotation_can_be_created_with_catalog_items_manual_items_and_project_dates(): void
     {
         $this->seed();
         $this->signInAsAdmin();
@@ -456,11 +514,13 @@ class QuotationModuleTest extends TestCase
             'default_currency_id' => $currency->id,
             'default_validity_days' => 15,
         ]);
+        $advisor = User::query()->where('email', 'admin@echoserp.test')->firstOrFail();
 
         $catalogImagePath = UploadedFile::fake()->image('crm-integral.png')->store('cotizaciones', 'quote_media');
 
         $catalogItem = QuotationItem::query()->create([
             'type' => 'service',
+            'item_structure' => 'multiple',
             'name' => 'CRM integral',
             'description' => 'Implementacion del modulo principal.',
             'unit_label' => 'modulo',
@@ -469,6 +529,22 @@ class QuotationModuleTest extends TestCase
             'currency_id' => $currency->id,
             'image_path' => $catalogImagePath,
             'is_active' => true,
+        ]);
+
+        $catalogItem->subItems()->createMany([
+            [
+                'sort_order' => 1,
+                'name' => 'Licencia base',
+                'unit_label' => 'licencia',
+                'price' => 1000,
+            ],
+            [
+                'sort_order' => 2,
+                'name' => 'Implementacion inicial',
+                'description' => 'Configuracion y carga base',
+                'unit_label' => 'servicio',
+                'price' => 500,
+            ],
         ]);
 
         $this->post('/admin/cotizaciones', [
@@ -485,12 +561,14 @@ class QuotationModuleTest extends TestCase
             'client_phone' => '+51 900000000',
             'client_address' => 'Lima',
             'currency_id' => $currency->id,
+            'sales_advisor_id' => $advisor->id,
             'work_start_date' => '2026-04-25',
-            'hide_work_plan' => '0',
             'work_end_date' => '2026-06-30',
-            'estimated_hours' => '384',
-            'estimated_days' => '48',
-            'hours_per_day' => '8',
+            'is_event' => '1',
+            'event_dates' => ['2026-04-28', '2026-06-05', '2026-06-12'],
+            'event_setup' => '2026-04-27',
+            'event_teardown' => '2026-06-13',
+            'event_location' => 'San Martin Porres',
             'tax_rate' => '10.00',
             'notes' => 'Notas del proyecto',
             'terms_and_conditions' => 'Terminos comerciales',
@@ -525,28 +603,11 @@ class QuotationModuleTest extends TestCase
                     'image' => UploadedFile::fake()->image('capacitacion.png'),
                 ],
             ],
-            'work_sections' => [
-                [
-                    'title' => 'Modulo Cotizaciones',
-                    'tasks' => [
-                        [
-                            'name' => 'Formulario de creacion y edicion',
-                            'description' => 'Alta y actualizacion de cotizaciones con items.',
-                            'duration_days' => '1',
-                        ],
-                        [
-                            'name' => 'Configuracion de cotizaciones',
-                            'description' => 'Numeracion, vigencia por defecto y terminos.',
-                            'duration_days' => '1',
-                        ],
-                    ],
-                ],
-            ],
         ])->assertRedirect('/admin/cotizaciones');
 
         $quotation = Quotation::query()
             ->where('number', 'COT-20508768533-CRM-0001')
-            ->with(['lineItems', 'workSections.tasks'])
+            ->with(['lineItems.subItems', 'workSections.tasks'])
             ->firstOrFail();
 
         $this->assertSame('Echos Peru SAC', $quotation->client_company_name);
@@ -554,26 +615,37 @@ class QuotationModuleTest extends TestCase
         $this->assertSame('3200.00', (string) $quotation->subtotal);
         $this->assertSame('100.00', (string) $quotation->discount_total);
         $this->assertSame('310.00', (string) $quotation->tax_total);
-        $this->assertSame('16.00', (string) $quotation->estimated_hours);
-        $this->assertSame('2.00', (string) $quotation->estimated_days);
-        $this->assertSame('8.00', (string) $quotation->hours_per_day);
+        $this->assertSame('2026-04-25', $quotation->work_start_date?->toDateString());
+        $this->assertSame('2026-06-30', $quotation->work_end_date?->toDateString());
+        $this->assertSame($advisor->id, $quotation->sales_advisor_id);
+        $this->assertTrue($quotation->is_event);
+        $this->assertSame(['2026-04-28', '2026-06-05', '2026-06-12'], $quotation->event_dates);
+        $this->assertSame('2026-04-27', $quotation->event_setup?->toDateString());
+        $this->assertSame('2026-06-13', $quotation->event_teardown?->toDateString());
+        $this->assertSame('San Martin Porres', $quotation->event_location);
+        $this->assertNull($quotation->estimated_hours);
+        $this->assertNull($quotation->estimated_days);
+        $this->assertNull($quotation->hours_per_day);
         $this->assertSame('Echos Peru SAC', $quotation->issuer_snapshot['company_name']);
         $this->assertCount(2, $quotation->lineItems);
         $this->assertSame('catalog', $quotation->lineItems[0]->source_type);
         $this->assertSame($catalogItem->id, $quotation->lineItems[0]->quotation_item_id);
+        $this->assertSame('multiple', $quotation->lineItems[0]->item_structure);
         $this->assertSame('catalog', $quotation->lineItems[0]->image_source);
         $this->assertSame(['Gestion de clientes', 'Pipeline comercial'], $quotation->lineItems[0]->specifications);
+        $this->assertCount(2, $quotation->lineItems[0]->subItems);
+        $this->assertSame('Licencia base', $quotation->lineItems[0]->subItems[0]->name);
+        $this->assertSame('1000.00', (string) $quotation->lineItems[0]->subItems[0]->price);
         $this->assertNotNull($quotation->lineItems[0]->image_path);
         $this->assertNotSame($catalogImagePath, $quotation->lineItems[0]->image_path);
         Storage::disk('quote_media')->assertExists($quotation->lineItems[0]->image_path);
         $this->assertSame('uploaded', $quotation->lineItems[1]->image_source);
         $this->assertNotNull($quotation->lineItems[1]->image_path);
         Storage::disk('quote_media')->assertExists($quotation->lineItems[1]->image_path);
-        $this->assertCount(1, $quotation->workSections);
-        $this->assertCount(2, $quotation->workSections[0]->tasks);
+        $this->assertCount(0, $quotation->workSections);
     }
 
-    public function test_simple_quotation_can_hide_work_plan_and_time_estimates(): void
+    public function test_quotation_project_end_date_is_optional(): void
     {
         $this->seed();
         $this->signInAsAdmin();
@@ -593,8 +665,11 @@ class QuotationModuleTest extends TestCase
 
         $this->get('/admin/cotizaciones/nueva')
             ->assertOk()
-            ->assertSee('Desactivar plan de trabajo y tiempo estimado')
-            ->assertSee('data-hide-work-plan-toggle checked', false);
+            ->assertSee('Asesor de ventas')
+            ->assertSee('Esta cotizacion es para un evento')
+            ->assertSee('Fecha de inicio')
+            ->assertSee('Fecha de finalizacion (opcional)')
+            ->assertDontSee('Plan de trabajo');
 
         $this->post('/admin/cotizaciones', [
             'number' => 'COT-SIMPLE-0001',
@@ -608,11 +683,6 @@ class QuotationModuleTest extends TestCase
             'client_document_number' => '20111111111',
             'currency_id' => $currency->id,
             'work_start_date' => '2026-04-28',
-            'hide_work_plan' => '1',
-            'work_end_date' => '2026-05-30',
-            'estimated_hours' => '999',
-            'estimated_days' => '999',
-            'hours_per_day' => '8',
             'tax_rate' => '0.00',
             'line_items' => [
                 [
@@ -626,18 +696,6 @@ class QuotationModuleTest extends TestCase
                     'discount_amount' => '0.00',
                 ],
             ],
-            'work_sections' => [
-                [
-                    'title' => 'No debe guardarse',
-                    'tasks' => [
-                        [
-                            'name' => 'Tarea oculta',
-                            'description' => 'No aplica.',
-                            'duration_days' => '4',
-                        ],
-                    ],
-                ],
-            ],
         ])->assertRedirect('/admin/cotizaciones');
 
         $quotation = Quotation::query()
@@ -648,10 +706,97 @@ class QuotationModuleTest extends TestCase
         $this->assertTrue($quotation->hide_work_plan);
         $this->assertSame('2026-04-28', $quotation->work_start_date?->toDateString());
         $this->assertNull($quotation->work_end_date);
+        $this->assertFalse($quotation->is_event);
+        $this->assertNull($quotation->event_dates);
+        $this->assertNull($quotation->event_setup);
+        $this->assertNull($quotation->event_teardown);
+        $this->assertNull($quotation->event_location);
         $this->assertNull($quotation->estimated_hours);
         $this->assertNull($quotation->estimated_days);
         $this->assertNull($quotation->hours_per_day);
         $this->assertCount(0, $quotation->workSections);
+    }
+
+    public function test_quotation_line_item_can_be_multiple_with_manual_subitems(): void
+    {
+        $this->seed();
+        $this->signInAsAdmin();
+
+        $currency = Currency::query()->create([
+            'name' => 'Sol peruano',
+            'code' => 'PEN',
+            'symbol' => 'S/',
+            'is_active' => true,
+        ]);
+
+        QuotationSetting::current()->update([
+            'company_name' => 'Echos Peru SAC',
+            'default_currency_id' => $currency->id,
+            'default_validity_days' => 15,
+        ]);
+
+        $this->get('/admin/cotizaciones/nueva')
+            ->assertOk()
+            ->assertSee('Este producto o servicio tiene subitems')
+            ->assertSee('Agregar subitem');
+
+        $this->post('/admin/cotizaciones', [
+            'number' => 'COT-MULTIPLE-MANUAL-0001',
+            'status' => 'draft',
+            'issue_date' => '2026-04-24',
+            'valid_until' => '2026-05-10',
+            'title' => 'Produccion de evento',
+            'summary' => 'Servicio armado desde la cotizacion.',
+            'client_company_name' => 'Cliente Evento SAC',
+            'client_document_label' => 'RUC',
+            'client_document_number' => '20999999991',
+            'currency_id' => $currency->id,
+            'tax_rate' => '0.00',
+            'line_items' => [
+                [
+                    'quotation_item_id' => '',
+                    'catalog_lookup' => '',
+                    'is_multiple' => '1',
+                    'name' => 'Paquete audiovisual',
+                    'description' => 'Componentes principales del evento.',
+                    'specifications_text' => "Operacion en sitio\nSoporte tecnico",
+                    'quantity' => '1',
+                    'unit_label' => 'paquete',
+                    'unit_price' => '',
+                    'discount_amount' => '100.00',
+                    'sub_items' => [
+                        [
+                            'name' => 'Pantalla LED',
+                            'description' => 'Pantalla principal',
+                            'unit_label' => 'unidad',
+                            'price' => '900.00',
+                        ],
+                        [
+                            'name' => 'Sonido profesional',
+                            'description' => 'Equipo PA',
+                            'unit_label' => 'servicio',
+                            'price' => '600.00',
+                        ],
+                    ],
+                ],
+            ],
+        ])->assertRedirect('/admin/cotizaciones');
+
+        $quotation = Quotation::query()
+            ->where('number', 'COT-MULTIPLE-MANUAL-0001')
+            ->with('lineItems.subItems')
+            ->firstOrFail();
+
+        $lineItem = $quotation->lineItems->first();
+
+        $this->assertSame('multiple', $lineItem->item_structure);
+        $this->assertSame('1500.00', (string) $lineItem->unit_price);
+        $this->assertSame('1400.00', (string) $lineItem->line_total);
+        $this->assertSame('1400.00', (string) $quotation->total);
+        $this->assertSame(['Operacion en sitio', 'Soporte tecnico'], $lineItem->specifications);
+        $this->assertCount(2, $lineItem->subItems);
+        $this->assertSame('Pantalla LED', $lineItem->subItems[0]->name);
+        $this->assertSame('900.00', (string) $lineItem->subItems[0]->price);
     }
 
     public function test_quotation_update_keeps_existing_line_item_image_when_not_reuploaded(): void
@@ -674,6 +819,7 @@ class QuotationModuleTest extends TestCase
             'default_currency_id' => $currency->id,
             'default_validity_days' => 15,
         ]);
+        $advisor = User::query()->where('email', 'admin@echoserp.test')->firstOrFail();
 
         $quotation = Quotation::query()->create([
             'number' => 'COT-20508768533-CRM-0002',
@@ -728,10 +874,14 @@ class QuotationModuleTest extends TestCase
             'client_phone' => '+51 900000000',
             'client_address' => 'Lima',
             'currency_id' => $currency->id,
-            'hide_work_plan' => '0',
-            'estimated_hours' => '999',
-            'estimated_days' => '999',
-            'hours_per_day' => '6',
+            'sales_advisor_id' => $advisor->id,
+            'work_start_date' => '2026-04-25',
+            'work_end_date' => '2026-05-30',
+            'is_event' => '1',
+            'event_dates' => ['2026-10-09'],
+            'event_setup' => '2026-10-08',
+            'event_teardown' => '2026-10-10',
+            'event_location' => 'Centro de convenciones',
             'tax_rate' => '10.00',
             'notes' => 'Notas actualizadas',
             'terms_and_conditions' => 'Terminos actualizados',
@@ -751,23 +901,6 @@ class QuotationModuleTest extends TestCase
                     'discount_amount' => '0.00',
                 ],
             ],
-            'work_sections' => [
-                [
-                    'title' => 'Plan actualizado',
-                    'tasks' => [
-                        [
-                            'name' => 'Relevamiento',
-                            'description' => 'Revision de alcance.',
-                            'duration_days' => '2',
-                        ],
-                        [
-                            'name' => 'Ejecucion',
-                            'description' => 'Ajustes finales.',
-                            'duration_days' => '3',
-                        ],
-                    ],
-                ],
-            ],
         ])->assertRedirect('/admin/cotizaciones');
 
         $quotation->refresh();
@@ -777,10 +910,18 @@ class QuotationModuleTest extends TestCase
         $this->assertSame('Capacitacion avanzada', $quotation->lineItems[0]->name);
         $this->assertSame($lineImagePath, $quotation->lineItems[0]->image_path);
         $this->assertSame('uploaded', $quotation->lineItems[0]->image_source);
-        $this->assertSame('30.00', (string) $quotation->estimated_hours);
-        $this->assertSame('5.00', (string) $quotation->estimated_days);
-        $this->assertSame('6.00', (string) $quotation->hours_per_day);
-        $this->assertCount(2, $quotation->workSections[0]->tasks);
+        $this->assertSame('2026-04-25', $quotation->work_start_date?->toDateString());
+        $this->assertSame('2026-05-30', $quotation->work_end_date?->toDateString());
+        $this->assertSame($advisor->id, $quotation->sales_advisor_id);
+        $this->assertTrue($quotation->is_event);
+        $this->assertSame(['2026-10-09'], $quotation->event_dates);
+        $this->assertSame('2026-10-08', $quotation->event_setup?->toDateString());
+        $this->assertSame('2026-10-10', $quotation->event_teardown?->toDateString());
+        $this->assertSame('Centro de convenciones', $quotation->event_location);
+        $this->assertNull($quotation->estimated_hours);
+        $this->assertNull($quotation->estimated_days);
+        $this->assertNull($quotation->hours_per_day);
+        $this->assertCount(0, $quotation->workSections);
         Storage::disk('quote_media')->assertExists($lineImagePath);
     }
 
@@ -808,6 +949,7 @@ class QuotationModuleTest extends TestCase
             'default_signer_name' => 'Gustavo Noriega',
             'default_signer_title' => 'Gerente general',
         ]);
+        $advisor = User::query()->where('email', 'admin@echoserp.test')->firstOrFail();
 
         $lineImagePath = UploadedFile::fake()->image('crm-pdf.png', 640, 360)->store('cotizaciones/line-items', 'quote_media');
 
@@ -825,12 +967,14 @@ class QuotationModuleTest extends TestCase
             'client_phone' => '+51 900000000',
             'client_address' => 'Lima',
             'currency_id' => $currency->id,
+            'sales_advisor_id' => $advisor->id,
             'work_start_date' => '2026-04-25',
-            'hide_work_plan' => false,
             'work_end_date' => '2026-05-30',
-            'estimated_hours' => 80,
-            'estimated_days' => 10,
-            'hours_per_day' => 8,
+            'is_event' => true,
+            'event_dates' => ['2026-04-28', '2026-06-05'],
+            'event_setup' => '2026-04-27',
+            'event_teardown' => '2026-06-13',
+            'event_location' => 'San Martin Porres',
             'subtotal' => 1500,
             'discount_total' => 100,
             'tax_rate' => 18,
@@ -856,18 +1000,6 @@ class QuotationModuleTest extends TestCase
             'line_total' => 1400,
         ]);
 
-        $section = $quotation->workSections()->create([
-            'sort_order' => 1,
-            'title' => 'Implementacion',
-        ]);
-
-        $section->tasks()->create([
-            'sort_order' => 1,
-            'name' => 'Configuracion inicial',
-            'description' => 'Parametrizacion y pruebas.',
-            'duration_days' => 3,
-        ]);
-
         $response = $this->get('/admin/cotizaciones/'.$quotation->id.'/pdf');
 
         $response->assertOk();
@@ -875,6 +1007,14 @@ class QuotationModuleTest extends TestCase
         $this->assertStringContainsString('attachment;', $response->headers->get('Content-Disposition'));
         $this->assertStringContainsString('cotizacion-cot-pdf-0001.pdf', $response->headers->get('Content-Disposition'));
         $this->assertStringStartsWith('%PDF', $response->getContent());
+
+        $previewResponse = $this->get('/admin/cotizaciones/'.$quotation->id.'/pdf?preview=1');
+
+        $previewResponse->assertOk();
+        $previewResponse->assertHeader('Content-Type', 'application/pdf');
+        $this->assertStringContainsString('inline;', $previewResponse->headers->get('Content-Disposition'));
+        $this->assertStringContainsString('cotizacion-cot-pdf-0001.pdf', $previewResponse->headers->get('Content-Disposition'));
+        $this->assertStringStartsWith('%PDF', $previewResponse->getContent());
     }
 
     private function signInAsAdmin(): void

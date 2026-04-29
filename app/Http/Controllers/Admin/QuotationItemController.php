@@ -33,7 +33,7 @@ class QuotationItemController extends Controller
             });
 
         $items = QuotationItem::query()
-            ->with('currency')
+            ->with(['currency', 'subItems'])
             ->orderByDesc('updated_at')
             ->orderBy('name')
             ->get()
@@ -46,6 +46,8 @@ class QuotationItemController extends Controller
                     'id' => $item->id,
                     'type' => $item->type,
                     'type_label' => $item->type === 'service' ? 'Servicio' : 'Producto',
+                    'item_structure' => $item->item_structure,
+                    'item_structure_label' => $item->item_structure === 'multiple' ? 'Multiple' : 'Normal',
                     'name' => $item->name,
                     'description' => $item->description,
                     'unit_label' => $item->unit_label,
@@ -58,6 +60,19 @@ class QuotationItemController extends Controller
                     'currency_label' => $item->currency
                         ? trim($item->currency->code.' '.($item->currency->symbol ?? ''))
                         : null,
+                    'sub_items' => $item->subItems
+                        ->map(fn ($subItem): array => [
+                            'name' => $subItem->name,
+                            'description' => $subItem->description,
+                            'unit_label' => $subItem->unit_label,
+                            'price' => $subItem->price,
+                            'price_label' => filled($subItem->price)
+                                ? $this->formatPriceLabel($item, (float) $subItem->price)
+                                : null,
+                        ])
+                        ->values()
+                        ->all(),
+                    'sub_items_count' => $item->subItems->count(),
                     'image_path' => $item->image_path,
                     'image_url' => filled($item->image_path)
                         ? Storage::disk('quote_media')->url($item->image_path)
@@ -120,15 +135,16 @@ class QuotationItemController extends Controller
 
         QuotationItem::query()->create([
             'type' => $validated['type'],
+            'item_structure' => $validated['item_structure'],
             'name' => $validated['name'],
             'description' => $validated['description'],
             'unit_label' => $validated['unit_label'] ?? null,
             'specifications' => $this->normalizeSpecifications($validated['specifications_text'] ?? null),
-            'price' => $this->normalizePrice($validated['price'] ?? null),
+            'price' => $this->resolveItemPrice($validated['item_structure'], $validated['price'] ?? null, $validated['sub_items'] ?? []),
             'currency_id' => $validated['currency_id'] ?? null,
             'image_path' => $this->storeImage($request->file('image')),
             'is_active' => $request->boolean('is_active'),
-        ]);
+        ])->subItems()->createMany($this->normalizeSubItems($validated['item_structure'], $validated['sub_items'] ?? []));
 
         return redirect()
             ->route('admin.quotations.catalog.index')
@@ -151,11 +167,12 @@ class QuotationItemController extends Controller
 
         $quotationItem->update([
             'type' => $validated['type'],
+            'item_structure' => $validated['item_structure'],
             'name' => $validated['name'],
             'description' => $validated['description'],
             'unit_label' => $validated['unit_label'] ?? null,
             'specifications' => $this->normalizeSpecifications($validated['specifications_text'] ?? null),
-            'price' => $this->normalizePrice($validated['price'] ?? null),
+            'price' => $this->resolveItemPrice($validated['item_structure'], $validated['price'] ?? null, $validated['sub_items'] ?? []),
             'currency_id' => $validated['currency_id'] ?? null,
             'image_path' => $this->syncImage(
                 $request->file('image'),
@@ -164,6 +181,9 @@ class QuotationItemController extends Controller
             ),
             'is_active' => $request->boolean('is_active'),
         ]);
+
+        $quotationItem->subItems()->delete();
+        $quotationItem->subItems()->createMany($this->normalizeSubItems($validated['item_structure'], $validated['sub_items'] ?? []));
 
         return redirect()
             ->route('admin.quotations.catalog.index')
@@ -187,26 +207,67 @@ class QuotationItemController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'type' => ['required', Rule::in(['product', 'service'])],
+            'item_structure' => ['required', Rule::in(['single', 'multiple'])],
             'name' => ['required', 'string', 'max:255'],
             'description' => ['required', 'string', 'max:5000'],
             'unit_label' => ['nullable', 'string', 'max:50'],
             'specifications_text' => ['nullable', 'string', 'max:5000'],
             'price' => ['nullable', 'numeric', 'min:0'],
             'currency_id' => ['nullable', 'integer', 'exists:currencies,id'],
+            'sub_items' => ['nullable', 'array'],
+            'sub_items.*.name' => ['nullable', 'string', 'max:255'],
+            'sub_items.*.description' => ['nullable', 'string', 'max:5000'],
+            'sub_items.*.unit_label' => ['nullable', 'string', 'max:50'],
+            'sub_items.*.price' => ['nullable', 'numeric', 'min:0'],
             'image' => ['nullable', 'image', 'max:4096'],
             'remove_image' => ['nullable', 'boolean'],
             'is_active' => ['nullable', 'boolean'],
         ]);
 
         $validator->after(function ($validator) use ($request): void {
+            $itemStructure = $request->input('item_structure', 'single');
             $hasPrice = filled($request->input('price'));
+            $subItems = collect($request->input('sub_items', []));
+            $hasPopulatedSubItem = false;
+            $hasSubItemPrice = false;
             $hasCurrency = filled($request->input('currency_id'));
 
-            if ($hasPrice && ! $hasCurrency) {
+            if ($itemStructure === 'multiple') {
+                foreach ($subItems as $index => $subItem) {
+                    if (! is_array($subItem)) {
+                        continue;
+                    }
+
+                    $hasContent = filled($subItem['name'] ?? null)
+                        || filled($subItem['description'] ?? null)
+                        || filled($subItem['unit_label'] ?? null)
+                        || filled($subItem['price'] ?? null);
+
+                    if (! $hasContent) {
+                        continue;
+                    }
+
+                    $hasPopulatedSubItem = true;
+
+                    if (filled($subItem['price'] ?? null)) {
+                        $hasSubItemPrice = true;
+                    }
+
+                    if (! filled($subItem['name'] ?? null)) {
+                        $validator->errors()->add("sub_items.$index.name", 'Cada subitem debe tener un nombre.');
+                    }
+                }
+
+                if (! $hasPopulatedSubItem) {
+                    $validator->errors()->add('sub_items', 'Agrega al menos un subitem para este producto o servicio multiple.');
+                }
+            }
+
+            if (($hasPrice || $hasSubItemPrice) && ! $hasCurrency) {
                 $validator->errors()->add('currency_id', 'Selecciona una moneda para el precio indicado.');
             }
 
-            if ($hasCurrency && ! $hasPrice) {
+            if ($hasCurrency && ! $hasPrice && ! $hasSubItemPrice) {
                 $validator->errors()->add('price', 'Ingresa un precio si seleccionas una moneda.');
             }
         });
@@ -232,6 +293,52 @@ class QuotationItemController extends Controller
         }
 
         return round((float) $value, 2);
+    }
+
+    private function resolveItemPrice(string $itemStructure, mixed $price, array $subItems): ?float
+    {
+        if ($itemStructure !== 'multiple') {
+            return $this->normalizePrice($price);
+        }
+
+        $total = collect($this->normalizeSubItems($itemStructure, $subItems))
+            ->sum(static fn (array $subItem): float => (float) ($subItem['price'] ?? 0));
+
+        return $total > 0 ? round($total, 2) : null;
+    }
+
+    private function normalizeSubItems(string $itemStructure, array $subItems): array
+    {
+        if ($itemStructure !== 'multiple') {
+            return [];
+        }
+
+        return collect($subItems)
+            ->map(function (mixed $subItem): ?array {
+                if (! is_array($subItem)) {
+                    return null;
+                }
+
+                $name = trim((string) ($subItem['name'] ?? ''));
+                $description = trim((string) ($subItem['description'] ?? ''));
+                $unitLabel = trim((string) ($subItem['unit_label'] ?? ''));
+                $price = $this->normalizePrice($subItem['price'] ?? null);
+
+                if (! filled($name) && ! filled($description) && ! filled($unitLabel) && $price === null) {
+                    return null;
+                }
+
+                return [
+                    'name' => $name,
+                    'description' => filled($description) ? $description : null,
+                    'unit_label' => filled($unitLabel) ? $unitLabel : null,
+                    'price' => $price,
+                ];
+            })
+            ->filter()
+            ->values()
+            ->map(static fn (array $subItem, int $index): array => $subItem + ['sort_order' => $index + 1])
+            ->all();
     }
 
     private function storeImage(?UploadedFile $file): ?string
@@ -262,13 +369,13 @@ class QuotationItemController extends Controller
         return $currentPath;
     }
 
-    private function formatPriceLabel(QuotationItem $item): ?string
+    private function formatPriceLabel(QuotationItem $item, ?float $amount = null): ?string
     {
-        if ($item->price === null || ! $item->currency) {
+        if (($amount === null && $item->price === null) || ! $item->currency) {
             return null;
         }
 
-        $amount = number_format((float) $item->price, 2, ',', '.');
+        $amount = number_format($amount ?? (float) $item->price, 2, ',', '.');
 
         return collect([
             $item->currency->symbol,

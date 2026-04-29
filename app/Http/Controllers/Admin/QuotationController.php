@@ -8,6 +8,7 @@ use App\Models\Customer;
 use App\Models\Quotation;
 use App\Models\QuotationItem;
 use App\Models\QuotationSetting;
+use App\Models\User;
 use App\Support\Quotations\QuotationPdfGenerator;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -59,7 +60,7 @@ class QuotationController extends Controller
         return view('admin.quotations.index', [
             'eyebrow' => 'Cotizaciones',
             'pageTitle' => 'Cotizaciones comerciales',
-            'pageDescription' => 'Crea y administra cotizaciones completas con cliente, items, plan de trabajo, notas y terminos listos para PDF.',
+            'pageDescription' => 'Crea y administra cotizaciones completas con cliente, items, fechas del proyecto, notas y terminos listos para PDF.',
             'metrics' => [
                 [
                     'value' => str_pad((string) $quotations->count(), 2, '0', STR_PAD_LEFT),
@@ -111,8 +112,10 @@ class QuotationController extends Controller
         $quotation->load([
             'currency',
             'customer',
+            'lineItems.subItems',
             'lineItems.catalogItem.currency',
-            'workSections.tasks',
+            'lineItems.catalogItem.subItems',
+            'salesAdvisor',
         ]);
 
         return $this->formView($quotation);
@@ -128,13 +131,14 @@ class QuotationController extends Controller
         return $this->persist($request, $quotation);
     }
 
-    public function downloadPdf(Quotation $quotation, QuotationPdfGenerator $pdfGenerator): Response
+    public function downloadPdf(Request $request, Quotation $quotation, QuotationPdfGenerator $pdfGenerator): Response
     {
         $pdf = $pdfGenerator->generate($quotation);
+        $disposition = $request->boolean('preview') ? 'inline' : 'attachment';
 
         return response($pdf, 200, [
             'Cache-Control' => 'private, max-age=0, must-revalidate',
-            'Content-Disposition' => 'attachment; filename="'.$pdfGenerator->filename($quotation).'"',
+            'Content-Disposition' => $disposition.'; filename="'.$pdfGenerator->filename($quotation).'"',
             'Content-Type' => 'application/pdf',
         ]);
     }
@@ -172,21 +176,25 @@ class QuotationController extends Controller
             ]);
 
         $catalogItems = QuotationItem::query()
-            ->with('currency')
+            ->with(['currency', 'subItems'])
             ->where('is_active', true)
             ->orderBy('type')
             ->orderBy('name')
             ->get()
             ->map(function (QuotationItem $item): array {
+                $specificationLines = $this->normalizeSpecificationLines($item->specifications ?? []);
+
                 return [
                     'id' => $item->id,
                     'type' => $item->type,
                     'type_label' => $item->type === 'service' ? 'Servicio' : 'Producto',
+                    'item_structure' => $item->item_structure,
+                    'is_multiple' => $item->item_structure === 'multiple',
                     'name' => $item->name,
                     'lookup_label' => $this->catalogLookupLabel($item),
                     'description' => $item->description,
-                    'specifications' => $this->normalizeSpecificationLines($item->specifications ?? []),
-                    'specifications_text' => $this->normalizeSpecificationLines($item->specifications ?? [])->implode(PHP_EOL),
+                    'specifications' => $specificationLines->all(),
+                    'specifications_text' => $specificationLines->implode(PHP_EOL),
                     'unit_label' => $item->unit_label,
                     'price' => $item->price,
                     'currency_code' => $item->currency?->code,
@@ -195,6 +203,18 @@ class QuotationController extends Controller
                     'image_url' => filled($item->image_path)
                         ? Storage::disk('quote_media')->url($item->image_path)
                         : null,
+                    'sub_items' => $item->subItems
+                        ->map(fn ($subItem): array => [
+                            'name' => $subItem->name,
+                            'description' => $subItem->description,
+                            'unit_label' => $subItem->unit_label,
+                            'price' => $subItem->price,
+                            'price_label' => filled($subItem->price)
+                                ? $this->formatMoney((float) $subItem->price, $item->currency?->symbol, $item->currency?->code)
+                                : null,
+                        ])
+                        ->values()
+                        ->all(),
                 ];
             })
             ->values();
@@ -220,6 +240,17 @@ class QuotationController extends Controller
             ])
             ->values();
 
+        $userOptions = User::query()
+            ->orderBy('name')
+            ->get(['id', 'name', 'email'])
+            ->map(static fn (User $user): array => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'label' => trim($user->name.' - '.$user->email),
+            ])
+            ->values();
+
         $quotationData = $quotation
             ? $this->serializeQuotation($quotation)
             : $this->defaultQuotationData($settings);
@@ -228,8 +259,8 @@ class QuotationController extends Controller
             'eyebrow' => 'Cotizaciones',
             'pageTitle' => $quotation ? 'Editar cotizacion' : 'Nueva cotizacion',
             'pageDescription' => $quotation
-                ? 'Actualiza el documento comercial, sus items, fechas, tareas y terminos.'
-                : 'Arma una cotizacion completa con datos del cliente, items, trabajo planificado y condiciones comerciales.',
+                ? 'Actualiza el documento comercial, sus items, fechas y terminos.'
+                : 'Arma una cotizacion completa con datos del cliente, items, fechas del proyecto y condiciones comerciales.',
             'quotation' => $quotationData,
             'settingsPreview' => [
                 'company_name' => $settings->company_name,
@@ -244,6 +275,7 @@ class QuotationController extends Controller
             'catalogItems' => $catalogItems,
             'customerOptions' => $customerOptions,
             'currencyOptions' => $currencies,
+            'userOptions' => $userOptions,
             'statusOptions' => $this->statusOptions(),
             'formAction' => $quotation
                 ? route('admin.quotations.update', $quotation)
@@ -265,21 +297,12 @@ class QuotationController extends Controller
         }
 
         $validated = $validator->validated();
-        $hideWorkPlan = $this->toBoolean($validated['hide_work_plan'] ?? false);
         $settings = QuotationSetting::current();
         $existingImagePaths = $quotation
             ? $quotation->lineItems()->pluck('image_path')->filter()->values()->all()
             : [];
         $lineItems = $this->prepareLineItems($request);
-        $workSections = $hideWorkPlan ? [] : $this->normalizeWorkSections($request->input('work_sections', []));
-        $workTime = $hideWorkPlan
-            ? ['estimated_hours' => null, 'estimated_days' => null, 'hours_per_day' => null]
-            : $this->calculateWorkTime(
-                $workSections,
-                $validated['hours_per_day'] ?? null,
-                $validated['estimated_days'] ?? null,
-                $validated['estimated_hours'] ?? null,
-            );
+        $isEvent = $this->toBoolean($validated['is_event'] ?? false);
         $taxRate = $this->normalizeDecimal($validated['tax_rate'] ?? $settings->default_tax_rate ?? 0);
         $issueDate = $validated['issue_date'];
         $validUntil = $validated['valid_until']
@@ -292,9 +315,7 @@ class QuotationController extends Controller
             $validated,
             $settings,
             $lineItems,
-            $workSections,
-            $workTime,
-            $hideWorkPlan,
+            $isEvent,
             $taxRate,
             $issueDate,
             $validUntil,
@@ -317,12 +338,18 @@ class QuotationController extends Controller
                 'client_phone' => $validated['client_phone'] ?? null,
                 'client_address' => $validated['client_address'] ?? null,
                 'currency_id' => $validated['currency_id'] ?? $settings->default_currency_id,
+                'sales_advisor_id' => $validated['sales_advisor_id'] ?? null,
                 'work_start_date' => $validated['work_start_date'] ?? null,
-                'hide_work_plan' => $hideWorkPlan,
-                'work_end_date' => $hideWorkPlan ? null : ($validated['work_end_date'] ?? null),
-                'estimated_hours' => $workTime['estimated_hours'],
-                'estimated_days' => $workTime['estimated_days'],
-                'hours_per_day' => $workTime['hours_per_day'],
+                'hide_work_plan' => true,
+                'work_end_date' => $validated['work_end_date'] ?? null,
+                'is_event' => $isEvent,
+                'event_dates' => $isEvent ? $this->normalizeEventDates($validated['event_dates'] ?? []) : null,
+                'event_setup' => $isEvent ? ($validated['event_setup'] ?? null) : null,
+                'event_teardown' => $isEvent ? ($validated['event_teardown'] ?? null) : null,
+                'event_location' => $isEvent ? ($validated['event_location'] ?? null) : null,
+                'estimated_hours' => null,
+                'estimated_days' => null,
+                'hours_per_day' => null,
                 'subtotal' => $totals['subtotal'],
                 'discount_total' => $totals['discount_total'],
                 'tax_rate' => $taxRate,
@@ -340,17 +367,13 @@ class QuotationController extends Controller
             $model->workSections()->delete();
 
             foreach ($lineItems as $lineItem) {
-                $model->lineItems()->create($lineItem);
-            }
+                $subItems = $lineItem['sub_items'] ?? [];
+                unset($lineItem['sub_items']);
 
-            foreach ($workSections as $section) {
-                $sectionModel = $model->workSections()->create([
-                    'sort_order' => $section['sort_order'],
-                    'title' => $section['title'],
-                ]);
+                $lineItemModel = $model->lineItems()->create($lineItem);
 
-                foreach ($section['tasks'] as $task) {
-                    $sectionModel->tasks()->create($task);
+                if ($subItems !== []) {
+                    $lineItemModel->subItems()->createMany($subItems);
                 }
             }
         });
@@ -373,7 +396,6 @@ class QuotationController extends Controller
 
     private function makeValidator(Request $request, ?Quotation $quotation = null)
     {
-        $hideWorkPlan = $this->toBoolean($request->input('hide_work_plan', false));
         $rules = [
             'number' => ['nullable', 'string', 'max:255', Rule::unique('quotations', 'number')->ignore($quotation?->id)],
             'status' => ['required', Rule::in($this->statusOptions()->keys()->all())],
@@ -389,18 +411,22 @@ class QuotationController extends Controller
             'client_phone' => ['nullable', 'string', 'max:50'],
             'client_address' => ['nullable', 'string', 'max:500'],
             'currency_id' => ['nullable', 'integer', 'exists:currencies,id'],
-            'hide_work_plan' => ['nullable', 'boolean'],
+            'sales_advisor_id' => ['nullable', 'integer', 'exists:users,id'],
             'work_start_date' => ['nullable', 'date'],
-            'work_end_date' => $hideWorkPlan ? ['nullable'] : ['nullable', 'date', 'after_or_equal:work_start_date'],
-            'estimated_hours' => $hideWorkPlan ? ['nullable'] : ['nullable', 'integer', 'min:0'],
-            'estimated_days' => $hideWorkPlan ? ['nullable'] : ['nullable', 'integer', 'min:0'],
-            'hours_per_day' => $hideWorkPlan ? ['nullable'] : ['nullable', 'integer', 'min:0'],
+            'work_end_date' => ['nullable', 'date'],
+            'is_event' => ['nullable', 'boolean'],
+            'event_dates' => ['nullable', 'array'],
+            'event_dates.*' => ['nullable', 'date', 'distinct'],
+            'event_setup' => ['nullable', 'date'],
+            'event_teardown' => ['nullable', 'date'],
+            'event_location' => ['nullable', 'string', 'max:500'],
             'tax_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'notes' => ['nullable', 'string', 'max:20000'],
             'terms_and_conditions' => ['nullable', 'string', 'max:20000'],
             'line_items' => ['required', 'array', 'min:1'],
             'line_items.*.quotation_item_id' => ['nullable', 'integer', 'exists:quotation_items,id'],
             'line_items.*.catalog_lookup' => ['nullable', 'string', 'max:255'],
+            'line_items.*.is_multiple' => ['nullable', 'boolean'],
             'line_items.*.name' => ['nullable', 'string', 'max:255'],
             'line_items.*.description' => ['nullable', 'string', 'max:5000'],
             'line_items.*.specifications_text' => ['nullable', 'string', 'max:10000'],
@@ -409,22 +435,16 @@ class QuotationController extends Controller
             'line_items.*.unit_label' => ['nullable', 'string', 'max:50'],
             'line_items.*.unit_price' => ['nullable', 'numeric', 'min:0'],
             'line_items.*.discount_amount' => ['nullable', 'numeric', 'min:0'],
-            'work_sections' => ['nullable', 'array'],
+            'line_items.*.sub_items' => ['nullable', 'array'],
+            'line_items.*.sub_items.*.name' => ['nullable', 'string', 'max:255'],
+            'line_items.*.sub_items.*.description' => ['nullable', 'string', 'max:5000'],
+            'line_items.*.sub_items.*.unit_label' => ['nullable', 'string', 'max:50'],
+            'line_items.*.sub_items.*.price' => ['nullable', 'numeric', 'min:0'],
         ];
-
-        if (! $hideWorkPlan) {
-            $rules += [
-                'work_sections.*.title' => ['nullable', 'string', 'max:255'],
-                'work_sections.*.tasks' => ['nullable', 'array'],
-                'work_sections.*.tasks.*.name' => ['nullable', 'string', 'max:255'],
-                'work_sections.*.tasks.*.description' => ['nullable', 'string', 'max:5000'],
-                'work_sections.*.tasks.*.duration_days' => ['nullable', 'integer', 'min:0'],
-            ];
-        }
 
         $validator = Validator::make($request->all(), $rules);
 
-        $validator->after(function ($validator) use ($request, $hideWorkPlan): void {
+        $validator->after(function ($validator) use ($request): void {
             $rawLineItems = collect($request->input('line_items', []));
             $hasPopulatedLine = false;
 
@@ -432,12 +452,27 @@ class QuotationController extends Controller
                 $quantity = filled($lineItem['quantity'] ?? null) ? (float) $lineItem['quantity'] : null;
                 $unitPrice = filled($lineItem['unit_price'] ?? null) ? (float) $lineItem['unit_price'] : null;
                 $discountAmount = filled($lineItem['discount_amount'] ?? null) ? (float) $lineItem['discount_amount'] : null;
+                $isMultiple = $this->toBoolean($lineItem['is_multiple'] ?? false);
+                $subItems = collect($lineItem['sub_items'] ?? []);
+                $hasPopulatedSubItem = false;
+                $subItemsTotal = 0.0;
                 $hasContent = filled($lineItem['quotation_item_id'] ?? null)
                     || filled($lineItem['catalog_lookup'] ?? null)
+                    || $isMultiple
                     || filled($lineItem['name'] ?? null)
                     || filled($lineItem['description'] ?? null)
                     || filled($lineItem['image_path'] ?? null)
                     || filled($lineItem['unit_label'] ?? null)
+                    || $subItems->contains(function (mixed $subItem): bool {
+                        if (! is_array($subItem)) {
+                            return false;
+                        }
+
+                        return filled($subItem['name'] ?? null)
+                            || filled($subItem['description'] ?? null)
+                            || filled($subItem['unit_label'] ?? null)
+                            || filled($subItem['price'] ?? null);
+                    })
                     || $request->hasFile("line_items.$index.image")
                     || ($quantity !== null && round($quantity, 2) !== 1.0)
                     || ($unitPrice !== null && round($unitPrice, 2) !== 0.0)
@@ -457,8 +492,47 @@ class QuotationController extends Controller
                     $validator->errors()->add("line_items.$index.quantity", 'Define la cantidad del item.');
                 }
 
+                if ($isMultiple) {
+                    foreach ($subItems as $subItemIndex => $subItem) {
+                        if (! is_array($subItem)) {
+                            continue;
+                        }
+
+                        $hasSubItemContent = filled($subItem['name'] ?? null)
+                            || filled($subItem['description'] ?? null)
+                            || filled($subItem['unit_label'] ?? null)
+                            || filled($subItem['price'] ?? null);
+
+                        if (! $hasSubItemContent) {
+                            continue;
+                        }
+
+                        $hasPopulatedSubItem = true;
+
+                        if (filled($subItem['price'] ?? null)) {
+                            $subItemsTotal += (float) $subItem['price'];
+                        }
+
+                        if (! filled($subItem['name'] ?? null)) {
+                            $validator->errors()->add(
+                                "line_items.$index.sub_items.$subItemIndex.name",
+                                'Cada subitem debe tener un nombre.'
+                            );
+                        }
+                    }
+
+                    if (! $hasPopulatedSubItem) {
+                        $validator->errors()->add(
+                            "line_items.$index.sub_items",
+                            'Agrega al menos un subitem para este producto o servicio multiple.'
+                        );
+                    }
+                }
+
                 $quantity = (float) ($lineItem['quantity'] ?? 0);
-                $unitPrice = (float) ($lineItem['unit_price'] ?? 0);
+                $unitPrice = $isMultiple && $subItemsTotal > 0
+                    ? $subItemsTotal
+                    : (float) ($lineItem['unit_price'] ?? 0);
                 $discountAmount = (float) ($lineItem['discount_amount'] ?? 0);
 
                 if ($discountAmount > max($quantity * $unitPrice, 0)) {
@@ -473,40 +547,13 @@ class QuotationController extends Controller
                 $validator->errors()->add('line_items', 'Agrega al menos un item a la cotizacion.');
             }
 
-            if ($hideWorkPlan) {
-                return;
-            }
-
-            foreach (collect($request->input('work_sections', [])) as $sectionIndex => $section) {
-                $tasks = collect($section['tasks'] ?? []);
-                $hasTaskContent = false;
-
-                foreach ($tasks as $taskIndex => $task) {
-                    $taskFilled = collect([
-                        $task['name'] ?? null,
-                        $task['description'] ?? null,
-                        $task['duration_days'] ?? null,
-                    ])->contains(static fn (mixed $value): bool => filled($value));
-
-                    if (! $taskFilled) {
-                        continue;
+            if ($request->filled('work_start_date') && $request->filled('work_end_date')) {
+                try {
+                    if (Carbon::parse($request->input('work_end_date'))->lt(Carbon::parse($request->input('work_start_date')))) {
+                        $validator->errors()->add('work_end_date', 'La fecha de finalizacion no puede ser anterior a la fecha de inicio.');
                     }
-
-                    $hasTaskContent = true;
-
-                    if (! filled($task['name'] ?? null)) {
-                        $validator->errors()->add(
-                            "work_sections.$sectionIndex.tasks.$taskIndex.name",
-                            'Cada tarea debe tener un nombre.'
-                        );
-                    }
-                }
-
-                if ($hasTaskContent && ! filled($section['title'] ?? null)) {
-                    $validator->errors()->add(
-                        "work_sections.$sectionIndex.title",
-                        'Cada bloque del plan de trabajo debe tener un titulo.'
-                    );
+                } catch (\Throwable) {
+                    // Las reglas de fecha base reportan los formatos invalidos.
                 }
             }
         });
@@ -533,17 +580,18 @@ class QuotationController extends Controller
             'client_phone' => '',
             'client_address' => '',
             'currency_id' => $settings->default_currency_id,
+            'sales_advisor_id' => auth()->id() ?? '',
             'work_start_date' => '',
-            'hide_work_plan' => true,
             'work_end_date' => '',
-            'estimated_hours' => '',
-            'estimated_days' => '',
-            'hours_per_day' => '8',
+            'is_event' => false,
+            'event_dates' => [''],
+            'event_setup' => '',
+            'event_teardown' => '',
+            'event_location' => '',
             'tax_rate' => $settings->default_tax_rate,
             'notes' => $settings->default_notes,
             'terms_and_conditions' => $settings->default_terms,
             'line_items' => [$this->emptyLineItem()],
-            'work_sections' => [$this->emptyWorkSection()],
         ];
     }
 
@@ -564,27 +612,34 @@ class QuotationController extends Controller
             'client_phone' => $quotation->client_phone,
             'client_address' => $quotation->client_address,
             'currency_id' => $quotation->currency_id,
+            'sales_advisor_id' => $quotation->sales_advisor_id,
             'work_start_date' => $quotation->work_start_date?->toDateString(),
-            'hide_work_plan' => $quotation->hide_work_plan,
             'work_end_date' => $quotation->work_end_date?->toDateString(),
-            'estimated_hours' => $quotation->estimated_hours,
-            'estimated_days' => $quotation->estimated_days,
-            'hours_per_day' => $quotation->hours_per_day,
+            'is_event' => $quotation->is_event,
+            'event_dates' => $this->normalizeEventDates($quotation->event_dates ?? []),
+            'event_setup' => $quotation->event_setup?->toDateString(),
+            'event_teardown' => $quotation->event_teardown?->toDateString(),
+            'event_location' => $quotation->event_location,
             'tax_rate' => $quotation->tax_rate,
             'notes' => $quotation->notes,
             'terms_and_conditions' => $quotation->terms_and_conditions,
             'line_items' => $quotation->lineItems
                 ->map(function ($lineItem): array {
+                    $specifications = $lineItem->specifications
+                        ? $this->normalizeSpecificationLines($lineItem->specifications)
+                        : ($lineItem->catalogItem
+                            ? $this->catalogSpecificationLines($lineItem->catalogItem)
+                            : collect());
+
                     return [
                         'quotation_item_id' => $lineItem->quotation_item_id,
                         'catalog_lookup' => $lineItem->catalogItem
                             ? $this->catalogLookupLabel($lineItem->catalogItem)
                             : '',
+                        'is_multiple' => $lineItem->item_structure === 'multiple',
                         'name' => $lineItem->name,
                         'description' => $lineItem->description,
-                        'specifications_text' => $this->normalizeSpecificationLines(
-                            $lineItem->specifications ?? $lineItem->catalogItem?->specifications ?? []
-                        )->implode(PHP_EOL),
+                        'specifications_text' => $specifications->implode(PHP_EOL),
                         'image_path' => $lineItem->image_path,
                         'image_source' => $lineItem->image_source,
                         'image_url' => filled($lineItem->image_path)
@@ -595,19 +650,12 @@ class QuotationController extends Controller
                         'unit_label' => $lineItem->unit_label,
                         'unit_price' => $lineItem->unit_price,
                         'discount_amount' => $lineItem->discount_amount,
-                    ];
-                })
-                ->values()
-                ->all(),
-            'work_sections' => $quotation->workSections
-                ->map(function ($section): array {
-                    return [
-                        'title' => $section->title,
-                        'tasks' => $section->tasks
-                            ->map(static fn ($task): array => [
-                                'name' => $task->name,
-                                'description' => $task->description,
-                                'duration_days' => $task->duration_days,
+                        'sub_items' => $lineItem->subItems
+                            ->map(static fn ($subItem): array => [
+                                'name' => $subItem->name,
+                                'description' => $subItem->description,
+                                'unit_label' => $subItem->unit_label,
+                                'price' => $subItem->price,
                             ])
                             ->values()
                             ->all(),
@@ -621,7 +669,8 @@ class QuotationController extends Controller
     private function prepareLineItems(Request $request): array
     {
         $catalogItems = QuotationItem::query()
-            ->get(['id', 'image_path', 'specifications'])
+            ->with(['currency', 'subItems'])
+            ->get(['id', 'item_structure', 'image_path', 'specifications', 'currency_id'])
             ->keyBy('id');
 
         return collect($request->input('line_items', []))
@@ -638,6 +687,24 @@ class QuotationController extends Controller
                 $specifications = $catalogSpecifications->isNotEmpty()
                     ? $catalogSpecifications
                     : $submittedSpecifications;
+                $isMultiple = $this->toBoolean($lineItem['is_multiple'] ?? false)
+                    || $catalogItem?->item_structure === 'multiple';
+                $subItems = $this->normalizeLineItemSubItems($lineItem['sub_items'] ?? []);
+
+                if ($isMultiple && $subItems === [] && $catalogItem) {
+                    $subItems = $this->normalizeLineItemSubItems(
+                        $catalogItem->subItems
+                            ->map(static fn ($subItem): array => [
+                                'name' => $subItem->name,
+                                'description' => $subItem->description,
+                                'unit_label' => $subItem->unit_label,
+                                'price' => $subItem->price,
+                            ])
+                            ->all()
+                    );
+                }
+
+                $subItemsTotal = collect($subItems)->sum(static fn (array $subItem): float => (float) ($subItem['price'] ?? 0));
                 $existingImagePath = trim((string) ($lineItem['image_path'] ?? ''));
                 $existingImageSource = trim((string) ($lineItem['image_source'] ?? ''));
                 $uploadedImage = $request->file("line_items.$index.image");
@@ -646,10 +713,12 @@ class QuotationController extends Controller
                 $rawDiscount = filled($lineItem['discount_amount'] ?? null) ? (float) $lineItem['discount_amount'] : null;
 
                 $hasContent = $catalogId !== null
+                    || $isMultiple
                     || filled($name)
                     || filled($description)
                     || filled($existingImagePath)
                     || filled($unitLabel)
+                    || $subItems !== []
                     || $uploadedImage instanceof UploadedFile
                     || ($rawQuantity !== null && round($rawQuantity, 2) !== 1.0)
                     || ($rawUnitPrice !== null && round($rawUnitPrice, 2) !== 0.0)
@@ -660,7 +729,9 @@ class QuotationController extends Controller
                 }
 
                 $quantity = $this->normalizeDecimal($lineItem['quantity'] ?? 1);
-                $unitPrice = $this->normalizeDecimal($lineItem['unit_price'] ?? 0);
+                $unitPrice = $isMultiple && $subItemsTotal > 0
+                    ? round($subItemsTotal, 2)
+                    : $this->normalizeDecimal($lineItem['unit_price'] ?? 0);
                 $discountAmount = $this->normalizeDecimal($lineItem['discount_amount'] ?? 0);
                 $lineTotal = max(($quantity * $unitPrice) - $discountAmount, 0);
                 $resolvedImage = $this->resolveLineItemImage(
@@ -674,6 +745,7 @@ class QuotationController extends Controller
                 return [
                     'source_type' => $catalogId ? 'catalog' : 'manual',
                     'quotation_item_id' => $catalogId,
+                    'item_structure' => $isMultiple ? 'multiple' : 'single',
                     'name' => $name,
                     'description' => filled($description) ? $description : null,
                     'specifications' => $specifications->isNotEmpty() ? $specifications->all() : null,
@@ -684,6 +756,7 @@ class QuotationController extends Controller
                     'unit_price' => $unitPrice,
                     'discount_amount' => $discountAmount,
                     'line_total' => round($lineTotal, 2),
+                    'sub_items' => $isMultiple ? $subItems : [],
                 ];
             })
             ->filter()
@@ -694,66 +767,24 @@ class QuotationController extends Controller
             ->all();
     }
 
-    private function normalizeWorkSections(array $sections): array
+    private function normalizeEventDates(mixed $value): array
     {
-        return collect($sections)
-            ->map(function (array $section): ?array {
-                $title = trim((string) ($section['title'] ?? ''));
-                $tasks = collect($section['tasks'] ?? [])
-                    ->map(function (array $task): ?array {
-                        $name = trim((string) ($task['name'] ?? ''));
-                        $description = trim((string) ($task['description'] ?? ''));
+        $dates = is_array($value) ? $value : [$value];
 
-                        if (! filled($name) && ! filled($description) && ! filled($task['duration_days'] ?? null)) {
-                            return null;
-                        }
-
-                        return [
-                            'name' => $name,
-                            'description' => filled($description) ? $description : null,
-                            'duration_days' => $this->nullableInteger($task['duration_days'] ?? null),
-                        ];
-                    })
-                    ->filter()
-                    ->values()
-                    ->map(static fn (array $task, int $index): array => $task + [
-                        'sort_order' => $index + 1,
-                    ])
-                    ->all();
-
-                if (! filled($title) && $tasks === []) {
+        return collect($dates)
+            ->map(static fn (mixed $date): string => trim((string) $date))
+            ->filter(static fn (string $date): bool => $date !== '')
+            ->map(static function (string $date): ?string {
+                try {
+                    return Carbon::parse($date)->toDateString();
+                } catch (\Throwable) {
                     return null;
                 }
-
-                return [
-                    'title' => $title,
-                    'tasks' => $tasks,
-                ];
             })
             ->filter()
+            ->unique()
             ->values()
-            ->map(static fn (array $section, int $index): array => $section + [
-                'sort_order' => $index + 1,
-            ])
             ->all();
-    }
-
-    private function calculateWorkTime(array $workSections, mixed $hoursPerDay, mixed $fallbackDays, mixed $fallbackHours): array
-    {
-        $durationDays = collect($workSections)
-            ->flatMap(static fn (array $section): array => $section['tasks'] ?? [])
-            ->sum(static fn (array $task): int => (int) ($task['duration_days'] ?? 0));
-        $normalizedHoursPerDay = $this->nullableInteger($hoursPerDay);
-        $estimatedDays = $durationDays > 0 ? $durationDays : $this->nullableInteger($fallbackDays);
-        $estimatedHours = $estimatedDays !== null && $normalizedHoursPerDay !== null
-            ? $estimatedDays * $normalizedHoursPerDay
-            : $this->nullableInteger($fallbackHours);
-
-        return [
-            'estimated_hours' => $estimatedHours,
-            'estimated_days' => $estimatedDays,
-            'hours_per_day' => $normalizedHoursPerDay,
-        ];
     }
 
     private function calculateTotals(array $lineItems, float $taxRate): array
@@ -826,16 +857,12 @@ class QuotationController extends Controller
         return round((float) ($value ?: 0), 2);
     }
 
-    private function nullableInteger(mixed $value): ?int
-    {
-        return filled($value) ? max((int) round((float) $value), 0) : null;
-    }
-
     private function emptyLineItem(): array
     {
         return [
             'quotation_item_id' => '',
             'catalog_lookup' => '',
+            'is_multiple' => false,
             'name' => '',
             'description' => '',
             'specifications_text' => '',
@@ -847,20 +874,7 @@ class QuotationController extends Controller
             'unit_label' => '',
             'unit_price' => '',
             'discount_amount' => '0.00',
-        ];
-    }
-
-    private function emptyWorkSection(): array
-    {
-        return [
-            'title' => '',
-            'tasks' => [
-                [
-                    'name' => '',
-                    'description' => '',
-                    'duration_days' => '',
-                ],
-            ],
+            'sub_items' => [],
         ];
     }
 
@@ -873,6 +887,70 @@ class QuotationController extends Controller
         return collect($lines)
             ->map(static fn (mixed $line): string => trim((string) $line))
             ->filter()
+            ->values();
+    }
+
+    private function normalizeLineItemSubItems(mixed $subItems): array
+    {
+        if (! is_array($subItems)) {
+            return [];
+        }
+
+        return collect($subItems)
+            ->map(function (mixed $subItem): ?array {
+                if (! is_array($subItem)) {
+                    return null;
+                }
+
+                $name = trim((string) ($subItem['name'] ?? ''));
+                $description = trim((string) ($subItem['description'] ?? ''));
+                $unitLabel = trim((string) ($subItem['unit_label'] ?? ''));
+                $price = filled($subItem['price'] ?? null)
+                    ? round((float) $subItem['price'], 2)
+                    : null;
+
+                if (! filled($name) && ! filled($description) && ! filled($unitLabel) && $price === null) {
+                    return null;
+                }
+
+                return [
+                    'name' => $name,
+                    'description' => filled($description) ? $description : null,
+                    'unit_label' => filled($unitLabel) ? $unitLabel : null,
+                    'price' => $price,
+                ];
+            })
+            ->filter()
+            ->values()
+            ->map(static fn (array $subItem, int $index): array => $subItem + ['sort_order' => $index + 1])
+            ->all();
+    }
+
+    private function catalogSpecificationLines(QuotationItem $item): Collection
+    {
+        $specifications = $this->normalizeSpecificationLines($item->specifications ?? []);
+
+        if ($item->item_structure !== 'multiple') {
+            return $specifications;
+        }
+
+        $subItemSpecifications = $item->subItems
+            ->map(function ($subItem) use ($item): string {
+                $details = collect([
+                    $subItem->description,
+                    $subItem->unit_label ? 'Unidad: '.$subItem->unit_label : null,
+                    filled($subItem->price)
+                        ? 'Precio: '.$this->formatMoney((float) $subItem->price, $item->currency?->symbol, $item->currency?->code)
+                        : null,
+                ])->filter()->implode(' | ');
+
+                return trim($subItem->name.($details !== '' ? ' - '.$details : ''));
+            })
+            ->filter()
+            ->values();
+
+        return $specifications
+            ->merge($subItemSpecifications)
             ->values();
     }
 

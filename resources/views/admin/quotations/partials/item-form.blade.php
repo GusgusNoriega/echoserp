@@ -4,19 +4,30 @@
     $reopened = session('modal') === $modalId;
     $defaultActive = array_key_exists('is_active', $defaults) ? ! empty($defaults['is_active']) : true;
     $typeValue = $reopened ? old('type', $defaults['type'] ?? 'product') : ($defaults['type'] ?? 'product');
+    $structureValue = $reopened ? old('item_structure', $defaults['item_structure'] ?? 'single') : ($defaults['item_structure'] ?? 'single');
     $nameValue = $reopened ? old('name', $defaults['name'] ?? '') : ($defaults['name'] ?? '');
     $descriptionValue = $reopened ? old('description', $defaults['description'] ?? '') : ($defaults['description'] ?? '');
     $unitValue = $reopened ? old('unit_label', $defaults['unit_label'] ?? '') : ($defaults['unit_label'] ?? '');
     $specificationsValue = $reopened ? old('specifications_text', $defaults['specifications_text'] ?? '') : ($defaults['specifications_text'] ?? '');
     $priceValue = $reopened ? old('price', $defaults['price'] ?? '') : ($defaults['price'] ?? '');
     $currencyValue = (int) ($reopened ? old('currency_id', $defaults['currency_id'] ?? 0) : ($defaults['currency_id'] ?? 0));
+    $subItems = $reopened ? old('sub_items', $defaults['sub_items'] ?? []) : ($defaults['sub_items'] ?? []);
     $isActiveRaw = $reopened ? old('is_active', $defaultActive ? '1' : null) : ($defaultActive ? '1' : null);
     $isActive = in_array($isActiveRaw, [true, 1, '1', 'on'], true);
     $removeImageRaw = $reopened ? old('remove_image') : null;
     $removeImage = in_array($removeImageRaw, [true, 1, '1', 'on'], true);
+
+    if (! is_array($subItems) || $subItems === []) {
+        $subItems = [[
+            'name' => '',
+            'description' => '',
+            'unit_label' => '',
+            'price' => '',
+        ]];
+    }
 @endphp
 
-<form class="modal-form" method="POST" action="{{ $action }}" enctype="multipart/form-data">
+<form class="modal-form" method="POST" action="{{ $action }}" enctype="multipart/form-data" data-catalog-item-form>
     @csrf
 
     @if (strtoupper($method) !== 'POST')
@@ -48,6 +59,34 @@
 
         @if ($bag->has('type'))
             <small class="field-error">{{ $bag->first('type') }}</small>
+        @endif
+    </fieldset>
+
+    <fieldset class="form-section">
+        <legend>Clase</legend>
+
+        <div class="choice-grid">
+            <label class="choice-card">
+                <input type="radio" name="item_structure" value="single" @checked($structureValue !== 'multiple') data-catalog-item-structure data-modal-focus>
+
+                <span class="choice-card__copy">
+                    <strong>Normal</strong>
+                    <small>Un solo producto o servicio con precio propio.</small>
+                </span>
+            </label>
+
+            <label class="choice-card">
+                <input type="radio" name="item_structure" value="multiple" @checked($structureValue === 'multiple') data-catalog-item-structure>
+
+                <span class="choice-card__copy">
+                    <strong>Multiple</strong>
+                    <small>Ficha con subitems que suman el precio total.</small>
+                </span>
+            </label>
+        </div>
+
+        @if ($bag->has('item_structure'))
+            <small class="field-error">{{ $bag->first('item_structure') }}</small>
         @endif
     </fieldset>
 
@@ -101,8 +140,8 @@
 
         <label class="form-field">
             <span>Precio</span>
-            <input type="number" name="price" value="{{ $priceValue }}" min="0" step="0.01" placeholder="0.00">
-            <small class="form-help">Este campo es opcional.</small>
+            <input type="number" name="price" value="{{ $priceValue }}" min="0" step="0.01" placeholder="0.00" data-catalog-item-price>
+            <small class="form-help" data-catalog-item-price-help>Este campo es opcional.</small>
 
             @if ($bag->has('price'))
                 <small class="field-error">{{ $bag->first('price') }}</small>
@@ -119,6 +158,75 @@
             <small class="field-error">{{ $bag->first('specifications_text') }}</small>
         @endif
     </label>
+
+    <div data-catalog-subitems @if ($structureValue !== 'multiple') hidden @endif>
+        <div class="panel-heading">
+            <div>
+                <p class="section-kicker">Subitems</p>
+                <h3>Componentes del producto o servicio multiple</h3>
+            </div>
+
+            <button class="button-link button-link--ghost button-link--compact" type="button" data-add-catalog-subitem>
+                Agregar subitem
+            </button>
+        </div>
+
+        @if ($bag->has('sub_items'))
+            <small class="field-error">{{ $bag->first('sub_items') }}</small>
+        @endif
+
+        <div class="quote-section-list" data-catalog-subitem-list data-next-subitem-index="{{ count($subItems) }}">
+            @foreach ($subItems as $subItemIndex => $subItem)
+                <article class="quote-task-card" data-catalog-subitem>
+                    <div class="form-grid form-grid--quote-line">
+                        <label class="form-field">
+                            <span>Subitem</span>
+                            <input type="text" name="sub_items[{{ $subItemIndex }}][name]" value="{{ $subItem['name'] ?? '' }}" placeholder="Nombre del subitem" data-catalog-subitem-name>
+
+                            @if ($bag->has("sub_items.$subItemIndex.name"))
+                                <small class="field-error">{{ $bag->first("sub_items.$subItemIndex.name") }}</small>
+                            @endif
+                        </label>
+
+                        <label class="form-field">
+                            <span>Precio</span>
+                            <input type="number" name="sub_items[{{ $subItemIndex }}][price]" value="{{ $subItem['price'] ?? '' }}" min="0" step="0.01" placeholder="0.00" data-catalog-subitem-price>
+
+                            @if ($bag->has("sub_items.$subItemIndex.price"))
+                                <small class="field-error">{{ $bag->first("sub_items.$subItemIndex.price") }}</small>
+                            @endif
+                        </label>
+                    </div>
+
+                    <div class="form-grid form-grid--two">
+                        <label class="form-field">
+                            <span>Unidad</span>
+                            <input type="text" name="sub_items[{{ $subItemIndex }}][unit_label]" value="{{ $subItem['unit_label'] ?? '' }}" placeholder="unidad, hora, fase...">
+
+                            @if ($bag->has("sub_items.$subItemIndex.unit_label"))
+                                <small class="field-error">{{ $bag->first("sub_items.$subItemIndex.unit_label") }}</small>
+                            @endif
+                        </label>
+
+                        <div class="quote-task-card__actions">
+                            <button class="button-link button-link--ghost button-link--compact" type="button" data-remove-catalog-subitem>
+                                Quitar subitem
+                            </button>
+                        </div>
+                    </div>
+
+                    <label class="form-field">
+                        <span>Descripcion</span>
+                        <textarea name="sub_items[{{ $subItemIndex }}][description]" rows="2" placeholder="Detalle opcional del subitem">{{ $subItem['description'] ?? '' }}</textarea>
+
+                        @if ($bag->has("sub_items.$subItemIndex.description"))
+                            <small class="field-error">{{ $bag->first("sub_items.$subItemIndex.description") }}</small>
+                        @endif
+                    </label>
+                </article>
+            @endforeach
+        </div>
+    </div>
 
     <div class="form-grid form-grid--two">
         <label class="form-field">
@@ -138,6 +246,40 @@
             @endif
         </label>
     </div>
+
+    <template data-catalog-subitem-template>
+        <article class="quote-task-card" data-catalog-subitem>
+            <div class="form-grid form-grid--quote-line">
+                <label class="form-field">
+                    <span>Subitem</span>
+                    <input type="text" name="sub_items[__SUBITEM_INDEX__][name]" value="" placeholder="Nombre del subitem" data-catalog-subitem-name>
+                </label>
+
+                <label class="form-field">
+                    <span>Precio</span>
+                    <input type="number" name="sub_items[__SUBITEM_INDEX__][price]" value="" min="0" step="0.01" placeholder="0.00" data-catalog-subitem-price>
+                </label>
+            </div>
+
+            <div class="form-grid form-grid--two">
+                <label class="form-field">
+                    <span>Unidad</span>
+                    <input type="text" name="sub_items[__SUBITEM_INDEX__][unit_label]" value="" placeholder="unidad, hora, fase...">
+                </label>
+
+                <div class="quote-task-card__actions">
+                    <button class="button-link button-link--ghost button-link--compact" type="button" data-remove-catalog-subitem>
+                        Quitar subitem
+                    </button>
+                </div>
+            </div>
+
+            <label class="form-field">
+                <span>Descripcion</span>
+                <textarea name="sub_items[__SUBITEM_INDEX__][description]" rows="2" placeholder="Detalle opcional del subitem"></textarea>
+            </label>
+        </article>
+    </template>
 
     <label class="toggle-field">
         <input type="checkbox" name="is_active" value="1" @checked($isActive)>

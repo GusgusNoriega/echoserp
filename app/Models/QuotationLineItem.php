@@ -6,12 +6,14 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 #[Fillable([
     'quotation_id',
     'sort_order',
     'source_type',
     'quotation_item_id',
+    'item_structure',
     'name',
     'description',
     'specifications',
@@ -46,5 +48,10 @@ class QuotationLineItem extends Model
     public function catalogItem(): BelongsTo
     {
         return $this->belongsTo(QuotationItem::class, 'quotation_item_id');
+    }
+
+    public function subItems(): HasMany
+    {
+        return $this->hasMany(QuotationLineItemSubItem::class)->orderBy('sort_order');
     }
 }

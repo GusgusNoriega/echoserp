@@ -325,6 +325,148 @@ const formatQuotationAmount = (value) => new Intl.NumberFormat('es-PE', {
     maximumFractionDigits: 2,
 }).format(value);
 
+const initializeQuotationItemForms = () => {
+    document.querySelectorAll('[data-catalog-item-form]').forEach((form) => {
+        const structureInputs = Array.from(form.querySelectorAll('[data-catalog-item-structure]'));
+        const subItemsPanel = form.querySelector('[data-catalog-subitems]');
+        const subItemList = form.querySelector('[data-catalog-subitem-list]');
+        const subItemTemplate = form.querySelector('[data-catalog-subitem-template]');
+        const priceInput = form.querySelector('[data-catalog-item-price]');
+        const priceHelp = form.querySelector('[data-catalog-item-price-help]');
+
+        if (!structureInputs.length || !subItemList || !subItemTemplate) {
+            return;
+        }
+
+        const selectedStructure = () => (
+            structureInputs.find((input) => input instanceof HTMLInputElement && input.checked)?.value ?? 'single'
+        );
+
+        const isMultiple = () => selectedStructure() === 'multiple';
+
+        const readDecimal = (input) => {
+            const parsed = Number.parseFloat(input?.value ?? '0');
+
+            return Number.isFinite(parsed) ? parsed : 0;
+        };
+
+        const syncSubItemTotal = () => {
+            if (!(priceInput instanceof HTMLInputElement) || !isMultiple()) {
+                return;
+            }
+
+            const total = Array.from(subItemList.querySelectorAll('[data-catalog-subitem-price]'))
+                .reduce((carry, input) => carry + readDecimal(input), 0);
+
+            priceInput.value = total > 0 ? total.toFixed(2) : '';
+        };
+
+        const refreshSubItemRows = () => {
+            const rows = Array.from(subItemList.querySelectorAll('[data-catalog-subitem]'));
+
+            rows.forEach((row, index) => {
+                const fields = {
+                    name: row.querySelector('[data-catalog-subitem-name]'),
+                    price: row.querySelector('[data-catalog-subitem-price]'),
+                    unit_label: row.querySelector('input[name$="[unit_label]"]'),
+                    description: row.querySelector('textarea[name$="[description]"]'),
+                };
+
+                Object.entries(fields).forEach(([field, input]) => {
+                    if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) {
+                        input.name = `sub_items[${index}][${field}]`;
+                    }
+                });
+            });
+
+            subItemList.dataset.nextSubitemIndex = String(rows.length);
+        };
+
+        const bindSubItemRow = (row) => {
+            if (!(row instanceof HTMLElement) || row.dataset.bound) {
+                return;
+            }
+
+            row.dataset.bound = 'true';
+            row.querySelector('[data-catalog-subitem-price]')?.addEventListener('input', syncSubItemTotal);
+            row.querySelector('[data-remove-catalog-subitem]')?.addEventListener('click', () => {
+                row.remove();
+
+                if (!subItemList.querySelector('[data-catalog-subitem]')) {
+                    addSubItem();
+                    return;
+                }
+
+                refreshSubItemRows();
+                syncSubItemTotal();
+            });
+        };
+
+        const bindSubItemRows = () => {
+            subItemList.querySelectorAll('[data-catalog-subitem]').forEach(bindSubItemRow);
+            refreshSubItemRows();
+            syncSubItemTotal();
+        };
+
+        const addSubItem = () => {
+            const nextIndex = Number.parseInt(subItemList.dataset.nextSubitemIndex ?? '0', 10);
+            const fragment = createTemplateFragment(subItemTemplate, {
+                '__SUBITEM_INDEX__': nextIndex,
+            });
+
+            if (!fragment) {
+                return;
+            }
+
+            subItemList.appendChild(fragment);
+            bindSubItemRows();
+            syncStructure();
+        };
+
+        const syncStructure = () => {
+            const multiple = isMultiple();
+
+            if (subItemsPanel) {
+                subItemsPanel.hidden = !multiple;
+            }
+
+            if (priceInput instanceof HTMLInputElement) {
+                priceInput.readOnly = multiple;
+            }
+
+            if (priceHelp) {
+                priceHelp.textContent = multiple
+                    ? 'Se calcula automaticamente con la suma de los subitems.'
+                    : 'Este campo es opcional.';
+            }
+
+            subItemList.querySelectorAll('input, textarea, button').forEach((control) => {
+                control.disabled = !multiple;
+            });
+
+            if (multiple && !subItemList.querySelector('[data-catalog-subitem]')) {
+                addSubItem();
+                return;
+            }
+
+            syncSubItemTotal();
+        };
+
+        structureInputs.forEach((input) => {
+            input.addEventListener('change', syncStructure);
+        });
+
+        form.querySelector('[data-add-catalog-subitem]')?.addEventListener('click', addSubItem);
+        form.addEventListener('submit', () => {
+            syncStructure();
+            syncSubItemTotal();
+        });
+
+        bindSubItemRows();
+        syncStructure();
+    });
+};
+
 const initializeQuotationEditors = () => {
     document.querySelectorAll('[data-quotation-editor]').forEach((form) => {
         let catalogItems = [];
@@ -350,24 +492,19 @@ const initializeQuotationEditors = () => {
         );
 
         const customerSelect = form.querySelector('[data-customer-select]');
-        const hideWorkPlanToggle = form.querySelector('[data-hide-work-plan-toggle]');
+        const eventToggle = form.querySelector('[data-event-toggle]');
+        const eventFields = form.querySelector('[data-event-fields]');
+        const eventDateList = form.querySelector('[data-event-date-list]');
+        const eventDateTemplate = form.querySelector('[data-event-date-template]');
         const lineItemList = form.querySelector('[data-line-item-list]');
-        const workSectionList = form.querySelector('[data-work-section-list]');
-        const workPlanSection = form.querySelector('[data-work-plan-section]');
-        const workPlanFields = Array.from(form.querySelectorAll('[data-work-plan-fields]'));
         const lineItemTemplate = form.querySelector('[data-line-item-template]');
-        const workSectionTemplate = form.querySelector('[data-work-section-template]');
-        const workTaskTemplate = form.querySelector('[data-work-task-template]');
-        const estimatedHoursInput = form.querySelector('[data-estimated-hours]');
-        const estimatedDaysInput = form.querySelector('[data-estimated-days]');
-        const hoursPerDayInput = form.querySelector('[data-hours-per-day]');
         const taxRateInput = form.querySelector('[data-tax-rate]');
         const subtotalTarget = form.querySelector('[data-summary-subtotal]');
         const discountTarget = form.querySelector('[data-summary-discount]');
         const taxTarget = form.querySelector('[data-summary-tax]');
         const totalTarget = form.querySelector('[data-summary-total]');
 
-        if (!lineItemList || !workSectionList || !lineItemTemplate || !workSectionTemplate || !workTaskTemplate) {
+        if (!lineItemList || !lineItemTemplate) {
             return;
         }
 
@@ -398,12 +535,6 @@ const initializeQuotationEditors = () => {
 
         const readDecimal = (input) => {
             const parsed = Number.parseFloat(input?.value ?? '0');
-
-            return Number.isFinite(parsed) ? parsed : 0;
-        };
-
-        const readInteger = (input) => {
-            const parsed = Number.parseInt(input?.value ?? '0', 10);
 
             return Number.isFinite(parsed) ? parsed : 0;
         };
@@ -445,58 +576,82 @@ const initializeQuotationEditors = () => {
             target.querySelectorAll('[data-whole-number]').forEach(bindWholeNumberInput);
         };
 
-        const isWorkPlanHidden = () => hideWorkPlanToggle instanceof HTMLInputElement && hideWorkPlanToggle.checked;
-
-        const setControlsDisabled = (container, isDisabled) => {
-            container.querySelectorAll('input, select, textarea, button').forEach((control) => {
-                control.disabled = isDisabled;
-            });
-        };
-
-        const syncWorkPlanVisibility = () => {
-            const shouldHide = isWorkPlanHidden();
-
-            workPlanFields.forEach((field) => {
-                field.hidden = shouldHide;
-                setControlsDisabled(field, shouldHide);
-            });
-
-            if (workPlanSection) {
-                workPlanSection.hidden = shouldHide;
-                setControlsDisabled(workPlanSection, shouldHide);
-            }
-        };
-
-        const syncWorkTime = () => {
-            if (isWorkPlanHidden()) {
+        const syncEventFields = () => {
+            if (!(eventToggle instanceof HTMLInputElement) || !eventFields) {
                 return;
             }
 
-            const durationDays = Array.from(workSectionList.querySelectorAll('[data-task-duration]'))
-                .reduce((carry, input) => carry + Math.max(readInteger(input), 0), 0);
-            const hoursPerDay = Math.max(readInteger(hoursPerDayInput), 0);
-            const wasCalculatedFromTasks = estimatedDaysInput?.dataset.calculatedFromTasks === 'true';
-            let days = durationDays > 0 ? durationDays : Math.max(readInteger(estimatedDaysInput), 0);
+            const shouldShow = eventToggle.checked;
+            eventFields.hidden = !shouldShow;
+            eventFields.querySelectorAll('input, select, textarea, button').forEach((control) => {
+                control.disabled = !shouldShow;
+            });
+        };
 
-            if (estimatedDaysInput && durationDays > 0) {
-                estimatedDaysInput.value = String(durationDays);
-                estimatedDaysInput.dataset.calculatedFromTasks = 'true';
-                days = durationDays;
-            } else if (estimatedDaysInput && wasCalculatedFromTasks) {
-                estimatedDaysInput.value = '';
-                delete estimatedDaysInput.dataset.calculatedFromTasks;
-                days = 0;
-            }
-
-            if (!estimatedHoursInput) {
+        const refreshEventDateRows = () => {
+            if (!eventDateList) {
                 return;
             }
 
-            if (days > 0 && hoursPerDay > 0) {
-                estimatedHoursInput.value = String(days * hoursPerDay);
-            } else if (durationDays > 0 || wasCalculatedFromTasks) {
-                estimatedHoursInput.value = '';
+            const rows = Array.from(eventDateList.querySelectorAll('[data-event-date-row]'));
+
+            rows.forEach((row, index) => {
+                const input = row.querySelector('input[type="date"]');
+                const label = row.querySelector('[data-event-date-label]');
+
+                if (input instanceof HTMLInputElement) {
+                    input.name = `event_dates[${index}]`;
+                }
+
+                if (label) {
+                    label.textContent = `Fecha ${index + 1}`;
+                }
+            });
+
+            eventDateList.dataset.nextEventDateIndex = String(rows.length);
+        };
+
+        const bindEventDateRow = (row) => {
+            if (!(row instanceof HTMLElement) || row.dataset.bound) {
+                return;
             }
+
+            row.dataset.bound = 'true';
+            row.querySelector('[data-remove-event-date]')?.addEventListener('click', () => {
+                row.remove();
+
+                if (eventDateList && !eventDateList.querySelector('[data-event-date-row]')) {
+                    addEventDate();
+                    return;
+                }
+
+                refreshEventDateRows();
+            });
+        };
+
+        const bindEventDateRows = () => {
+            eventDateList?.querySelectorAll('[data-event-date-row]').forEach(bindEventDateRow);
+            refreshEventDateRows();
+        };
+
+        const addEventDate = () => {
+            if (!eventDateList || !eventDateTemplate) {
+                return;
+            }
+
+            const nextIndex = Number.parseInt(eventDateList.dataset.nextEventDateIndex ?? '0', 10);
+            const fragment = createTemplateFragment(eventDateTemplate, {
+                '__EVENT_DATE_INDEX__': nextIndex,
+                '__EVENT_DATE_NUMBER__': nextIndex + 1,
+            });
+
+            if (!fragment) {
+                return;
+            }
+
+            eventDateList.appendChild(fragment);
+            bindEventDateRows();
+            syncEventFields();
         };
 
         const releaseLineItemPreviewUrl = (lineItem) => {
@@ -598,10 +753,200 @@ const initializeQuotationEditors = () => {
             }
         };
 
+        const lineItemIndex = (lineItem) => {
+            const indexedInput = lineItem.querySelector('[name^="line_items["]');
+            const match = indexedInput?.name?.match(/^line_items\[([^\]]+)\]/);
+
+            return match?.[1] ?? '0';
+        };
+
+        const isLineMultiple = (lineItem) => {
+            const toggle = lineItem.querySelector('[data-line-multiple-toggle]');
+
+            return toggle instanceof HTMLInputElement && toggle.checked;
+        };
+
+        const syncLineSubItemTotal = (lineItem) => {
+            const unitPriceInput = lineItem.querySelector('[data-line-unit-price]');
+
+            if (!(unitPriceInput instanceof HTMLInputElement) || !isLineMultiple(lineItem)) {
+                return;
+            }
+
+            const subItemList = lineItem.querySelector('[data-line-subitem-list]');
+            const total = Array.from(subItemList?.querySelectorAll('[data-line-subitem-price]') ?? [])
+                .reduce((carry, input) => carry + readDecimal(input), 0);
+
+            unitPriceInput.value = total > 0 ? total.toFixed(2) : '';
+            syncLineTotal(lineItem);
+            syncSummary();
+        };
+
+        const refreshLineSubItemRows = (lineItem) => {
+            const subItemList = lineItem.querySelector('[data-line-subitem-list]');
+
+            if (!subItemList) {
+                return;
+            }
+
+            const currentLineIndex = lineItemIndex(lineItem);
+            const rows = Array.from(subItemList.querySelectorAll('[data-line-subitem-row]'));
+
+            rows.forEach((row, index) => {
+                const fields = {
+                    name: row.querySelector('[data-line-subitem-name]'),
+                    price: row.querySelector('[data-line-subitem-price]'),
+                    unit_label: row.querySelector('[data-line-subitem-unit]'),
+                    description: row.querySelector('[data-line-subitem-description]'),
+                };
+                const label = row.querySelector('[data-line-subitem-label]');
+
+                Object.entries(fields).forEach(([field, input]) => {
+                    if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) {
+                        input.name = `line_items[${currentLineIndex}][sub_items][${index}][${field}]`;
+                    }
+                });
+
+                if (label) {
+                    label.textContent = `Subitem ${index + 1}`;
+                }
+            });
+
+            subItemList.dataset.nextLineSubitemIndex = String(rows.length);
+        };
+
+        const bindLineSubItemRow = (lineItem, row) => {
+            if (!(row instanceof HTMLElement) || row.dataset.bound) {
+                return;
+            }
+
+            row.dataset.bound = 'true';
+            row.querySelector('[data-line-subitem-price]')?.addEventListener('input', () => {
+                syncLineSubItemTotal(lineItem);
+            });
+            row.querySelector('[data-remove-line-subitem]')?.addEventListener('click', () => {
+                const subItemList = lineItem.querySelector('[data-line-subitem-list]');
+
+                row.remove();
+
+                if (subItemList && !subItemList.querySelector('[data-line-subitem-row]')) {
+                    addLineSubItem(lineItem);
+                    return;
+                }
+
+                refreshLineSubItemRows(lineItem);
+                syncLineSubItemTotal(lineItem);
+            });
+        };
+
+        const bindLineSubItemRows = (lineItem) => {
+            lineItem.querySelectorAll('[data-line-subitem-row]').forEach((row) => {
+                bindLineSubItemRow(lineItem, row);
+            });
+            refreshLineSubItemRows(lineItem);
+            syncLineSubItemTotal(lineItem);
+        };
+
+        const addLineSubItem = (lineItem, subItem = {}) => {
+            const subItemList = lineItem.querySelector('[data-line-subitem-list]');
+            const subItemTemplate = lineItem.querySelector('[data-line-subitem-template]');
+
+            if (!subItemList || !subItemTemplate) {
+                return null;
+            }
+
+            const nextIndex = Number.parseInt(subItemList.dataset.nextLineSubitemIndex ?? '0', 10);
+            const fragment = createTemplateFragment(subItemTemplate, {
+                '__LINE_SUBITEM_INDEX__': nextIndex,
+                '__LINE_SUBITEM_NUMBER__': nextIndex + 1,
+            });
+
+            if (!fragment) {
+                return null;
+            }
+
+            subItemList.appendChild(fragment);
+            const row = subItemList.querySelector('[data-line-subitem-row]:last-child');
+
+            if (row instanceof HTMLElement) {
+                const fields = {
+                    '[data-line-subitem-name]': subItem.name ?? '',
+                    '[data-line-subitem-price]': subItem.price ?? '',
+                    '[data-line-subitem-unit]': subItem.unit_label ?? '',
+                    '[data-line-subitem-description]': subItem.description ?? '',
+                };
+
+                Object.entries(fields).forEach(([selector, value]) => {
+                    const input = row.querySelector(selector);
+
+                    if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) {
+                        input.value = value ?? '';
+                    }
+                });
+            }
+
+            bindLineSubItemRows(lineItem);
+            syncLineStructure(lineItem);
+
+            return row;
+        };
+
+        const setLineSubItems = (lineItem, subItems = []) => {
+            const subItemList = lineItem.querySelector('[data-line-subitem-list]');
+
+            if (!subItemList) {
+                return;
+            }
+
+            subItemList.querySelectorAll('[data-line-subitem-row]').forEach((row) => row.remove());
+
+            const rows = Array.isArray(subItems) && subItems.length > 0
+                ? subItems
+                : [{}];
+
+            rows.forEach((subItem) => addLineSubItem(lineItem, subItem));
+            refreshLineSubItemRows(lineItem);
+            syncLineSubItemTotal(lineItem);
+        };
+
+        const syncLineStructure = (lineItem) => {
+            const multiple = isLineMultiple(lineItem);
+            const subItemsPanel = lineItem.querySelector('[data-line-subitems]');
+            const subItemList = lineItem.querySelector('[data-line-subitem-list]');
+            const unitPriceInput = lineItem.querySelector('[data-line-unit-price]');
+            const priceHelp = lineItem.querySelector('[data-line-price-help]');
+
+            if (subItemsPanel) {
+                subItemsPanel.hidden = !multiple;
+            }
+
+            if (unitPriceInput instanceof HTMLInputElement) {
+                unitPriceInput.readOnly = multiple;
+            }
+
+            if (priceHelp) {
+                priceHelp.textContent = multiple
+                    ? 'Se calcula automaticamente con la suma de los subitems.'
+                    : 'Precio unitario de la linea.';
+            }
+
+            subItemList?.querySelectorAll('input, textarea, button').forEach((control) => {
+                control.disabled = !multiple;
+            });
+
+            if (multiple && subItemList && !subItemList.querySelector('[data-line-subitem-row]')) {
+                addLineSubItem(lineItem);
+                return;
+            }
+
+            syncLineSubItemTotal(lineItem);
+        };
+
         const applyCatalogItem = (lineItem, lookupValue) => {
             const lookup = String(lookupValue ?? '').trim();
             const catalogItem = catalogMap.get(lookup);
             const hiddenCatalogId = lineItem.querySelector('[data-catalog-id]');
+            const multipleToggle = lineItem.querySelector('[data-line-multiple-toggle]');
             const nameInput = lineItem.querySelector('[data-line-name]');
             const descriptionInput = lineItem.querySelector('[data-line-description]');
             const specificationsInput = lineItem.querySelector('[data-line-specifications]');
@@ -647,6 +992,12 @@ const initializeQuotationEditors = () => {
                 unitInput.value = catalogItem.unit_label ?? '';
             }
 
+            if (multipleToggle instanceof HTMLInputElement) {
+                multipleToggle.checked = Boolean(catalogItem.is_multiple || catalogItem.item_structure === 'multiple');
+            }
+
+            setLineSubItems(lineItem, catalogItem.sub_items ?? []);
+
             if (unitPriceInput) {
                 unitPriceInput.value = catalogItem.price ?? '';
             }
@@ -678,12 +1029,14 @@ const initializeQuotationEditors = () => {
                 source: catalogItem.image_path ? 'catalog' : '',
             });
 
+            syncLineStructure(lineItem);
             syncLineTotal(lineItem);
             syncSummary();
         };
 
         const bindLineItem = (lineItem) => {
             const lookupInput = lineItem.querySelector('[data-catalog-lookup]');
+            const multipleToggle = lineItem.querySelector('[data-line-multiple-toggle]');
             const quantityInput = lineItem.querySelector('[data-line-quantity]');
             const unitPriceInput = lineItem.querySelector('[data-line-unit-price]');
             const discountInput = lineItem.querySelector('[data-line-discount]');
@@ -696,6 +1049,17 @@ const initializeQuotationEditors = () => {
             const clearImageButton = lineItem.querySelector('[data-clear-line-image]');
 
             bindWholeNumberInput(quantityInput);
+            bindLineSubItemRows(lineItem);
+
+            multipleToggle?.addEventListener('change', () => {
+                syncLineStructure(lineItem);
+                syncLineTotal(lineItem);
+                syncSummary();
+            });
+
+            lineItem.querySelector('[data-add-line-subitem]')?.addEventListener('click', () => {
+                addLineSubItem(lineItem);
+            });
 
             if (lookupInput) {
                 const onLookupChange = () => {
@@ -788,6 +1152,7 @@ const initializeQuotationEditors = () => {
                 url: imageUrlInput?.value ?? '',
                 source: imageSourceInput?.value ?? '',
             });
+            syncLineStructure(lineItem);
             syncLineTotal(lineItem);
         };
 
@@ -812,124 +1177,22 @@ const initializeQuotationEditors = () => {
             syncSummary();
         };
 
-        const bindWorkTask = (task) => {
-            const removeButton = task.querySelector('[data-remove-work-task]');
-            const durationInput = task.querySelector('[data-task-duration]');
-
-            bindWholeNumberInput(durationInput);
-
-            durationInput?.addEventListener('input', syncWorkTime);
-            durationInput?.addEventListener('change', () => {
-                normalizeWholeNumberInput(durationInput);
-                syncWorkTime();
-            });
-
-            removeButton?.addEventListener('click', () => {
-                const section = task.closest('[data-work-section]');
-                const list = task.closest('[data-work-task-list]');
-
-                task.remove();
-
-                if (section && list && !list.querySelector('[data-work-task]')) {
-                    addWorkTask(section);
-                }
-
-                syncWorkTime();
-            });
-        };
-
-        const addWorkTask = (section) => {
-            const taskList = section.querySelector('[data-work-task-list]');
-
-            if (!taskList) {
-                return;
-            }
-
-            const sectionIndex = section.dataset.sectionIndex ?? '0';
-            const nextTaskIndex = Number.parseInt(section.dataset.nextTaskIndex ?? '0', 10);
-            const fragment = createTemplateFragment(workTaskTemplate, {
-                '__SECTION_INDEX__': sectionIndex,
-                '__TASK_INDEX__': nextTaskIndex,
-            });
-
-            if (!fragment) {
-                return;
-            }
-
-            taskList.appendChild(fragment);
-            section.dataset.nextTaskIndex = String(nextTaskIndex + 1);
-            taskList.querySelectorAll('[data-work-task]').forEach((task) => {
-                if (!task.dataset.bound) {
-                    task.dataset.bound = 'true';
-                    bindWorkTask(task);
-                }
-            });
-            syncWorkTime();
-        };
-
-        const bindWorkSection = (section) => {
-            const addTaskButton = section.querySelector('[data-add-work-task]');
-            const removeSectionButton = section.querySelector('[data-remove-work-section]');
-
-            addTaskButton?.addEventListener('click', () => {
-                addWorkTask(section);
-            });
-
-            removeSectionButton?.addEventListener('click', () => {
-                section.remove();
-                syncWorkTime();
-            });
-
-            section.querySelectorAll('[data-work-task]').forEach((task) => {
-                if (!task.dataset.bound) {
-                    task.dataset.bound = 'true';
-                    bindWorkTask(task);
-                }
-            });
-        };
-
-        const addWorkSection = () => {
-            const nextSectionIndex = Number.parseInt(workSectionList.dataset.nextSectionIndex ?? '0', 10);
-            const fragment = createTemplateFragment(workSectionTemplate, {
-                '__SECTION_INDEX__': nextSectionIndex,
-            });
-
-            if (!fragment) {
-                return;
-            }
-
-            workSectionList.appendChild(fragment);
-            workSectionList.dataset.nextSectionIndex = String(nextSectionIndex + 1);
-            workSectionList.querySelectorAll('[data-work-section]').forEach((section) => {
-                if (!section.dataset.bound) {
-                    section.dataset.bound = 'true';
-                    bindWorkSection(section);
-                }
-            });
-            syncWorkTime();
-        };
-
         customerSelect?.addEventListener('change', () => {
             applyCustomer(customerSelect.value);
         });
-        hideWorkPlanToggle?.addEventListener('change', () => {
-            syncWorkPlanVisibility();
-            syncWorkTime();
-        });
+        eventToggle?.addEventListener('change', syncEventFields);
 
+        form.querySelector('[data-add-event-date]')?.addEventListener('click', addEventDate);
         form.querySelector('[data-add-line-item]')?.addEventListener('click', addLineItem);
-        form.querySelector('[data-add-work-section]')?.addEventListener('click', addWorkSection);
         taxRateInput?.addEventListener('input', syncSummary);
-        hoursPerDayInput?.addEventListener('input', syncWorkTime);
-        hoursPerDayInput?.addEventListener('change', () => {
-            normalizeWholeNumberInput(hoursPerDayInput);
-            syncWorkTime();
-        });
         form.addEventListener('submit', () => {
-            syncWorkPlanVisibility();
+            syncEventFields();
+            lineItemList.querySelectorAll('[data-line-item]').forEach((lineItem) => {
+                syncLineStructure(lineItem);
+                syncLineSubItemTotal(lineItem);
+            });
             bindWholeNumberInputs(form);
             form.querySelectorAll('[data-whole-number]').forEach(normalizeWholeNumberInput);
-            syncWorkTime();
         });
 
         lineItemList.querySelectorAll('[data-line-item]').forEach((lineItem) => {
@@ -939,20 +1202,14 @@ const initializeQuotationEditors = () => {
             }
         });
 
-        workSectionList.querySelectorAll('[data-work-section]').forEach((section) => {
-            if (!section.dataset.bound) {
-                section.dataset.bound = 'true';
-                bindWorkSection(section);
-            }
-        });
-
+        bindEventDateRows();
         bindWholeNumberInputs(form);
-        syncWorkPlanVisibility();
-        syncWorkTime();
+        syncEventFields();
         syncSummary();
     });
 };
 
+initializeQuotationItemForms();
 initializeQuotationEditors();
 
 const initialModal = body.dataset.initialModal?.trim();
